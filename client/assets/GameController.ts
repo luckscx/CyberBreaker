@@ -3,16 +3,16 @@ import * as OneA2BLogic from './OneA2BLogic';
 import { buildKeyboard } from './DynamicNumpad';
 import { Network } from './Network';
 import { GameAudio } from './GameAudio';
+import { addGradientBg } from './GradientBg';
 
 const { ccclass, property } = _decorator;
 
-// 布局常量（与设计分辨率一致，Canvas 可能左对齐，需把根节点放到画布中心）
-const CANVAS_W = 1280;
-const CANVAS_H = 720;
-const CENTER_X = CANVAS_W / 2;
-const CENTER_Y = CANVAS_H / 2;
+const DESIGN_W = 1280;
+const DESIGN_H = 720;
 const UI_SCALE = 1.35;
 const SECTION_GAP = 24;
+const BOTTOM_MARGIN = 624;
+const TOP_MARGIN = 120;
 const TOP_H = 72;
 const HISTORY_H = 220;
 const INPUT_H = 88;
@@ -38,6 +38,10 @@ export interface ActionTimelineItem {
   usedSkill?: string;
 }
 
+export interface IViewBootstrap {
+  showLobby(): void;
+}
+
 @ccclass('GameController')
 export class GameController extends Component {
   @property(Prefab)
@@ -45,6 +49,13 @@ export class GameController extends Component {
   /** 服务器根地址，留空则用默认 http://localhost:3000 */
   @property
   serverUrl = '';
+
+  /** 方式 A：由 GameBootstrap 注入，用于「返回大厅」 */
+  bootstrap: IViewBootstrap | null = null;
+
+  setBootstrap(b: IViewBootstrap) {
+    this.bootstrap = b;
+  }
 
   private gameRoot: Node | null = null;
   private topArea: Node | null = null;
@@ -58,6 +69,8 @@ export class GameController extends Component {
   private slotLabels: Label[] = [];
   private feedbackLabel: Label | null = null;
 
+  private viewW = DESIGN_W;
+  private viewH = DESIGN_H;
   private secret = '';
   private currentInput = '';
   private timerRemain = 0;
@@ -72,18 +85,29 @@ export class GameController extends Component {
       this.gameRoot = null;
       this.buildContentInLayout(layout);
     } else {
+      const ut = this.node.getComponent(UITransform);
+      const c = ut?.contentSize;
+      if (c && c.width > 0 && c.height > 0) {
+        this.viewW = c.width;
+        this.viewH = c.height;
+      }
+      const cx = this.viewW / 2;
+      const halfH = this.viewH / 2;
       const root = new Node('GameRoot');
       const rootT = root.addComponent(UITransform);
-      rootT.setContentSize(CANVAS_W, CANVAS_H);
+      rootT.setContentSize(this.viewW, this.viewH);
       rootT.setAnchorPoint(ANCHOR_CENTER);
       this.node.addChild(root);
-      root.setPosition(CENTER_X, CENTER_Y, 0);
+      const isUnderBattleRoot = this.node.name === 'BattleRoot';
+      root.setPosition(isUnderBattleRoot ? 0 : cx, isUnderBattleRoot ? 0 : halfH, 0);
       root.setScale(UI_SCALE, UI_SCALE, 1);
       this.gameRoot = root;
-      const yTop = CENTER_Y - TOP_H / 2;
-      const yHist = yTop - TOP_H / 2 - SECTION_GAP - HISTORY_H / 2;
-      const yIn = yHist - HISTORY_H / 2 - SECTION_GAP - INPUT_H / 2;
-      const yKb = yIn - INPUT_H / 2 - SECTION_GAP - KEYBOARD_H / 2;
+      // 从屏幕底部往上排：键盘贴底，输入区在键盘上，历史在上，倒计时在顶部（适配手机竖屏）
+      // 倒计时 y 需除以 UI_SCALE，缩放后才不会超出父节点顶部被裁掉
+      const yKb = -halfH + KEYBOARD_H / 2 + BOTTOM_MARGIN;
+      const yIn = yKb + KEYBOARD_H / 2 + SECTION_GAP + INPUT_H / 2;
+      const yHist = yIn + INPUT_H / 2 + SECTION_GAP + HISTORY_H / 2;
+      const yTop = (halfH - TOP_MARGIN - TOP_H / 2) / UI_SCALE;
       this.topArea = this.createTopArea(root);
       this.topArea.setPosition(0, yTop, 0);
       this.historyArea = this.createHistoryArea(root);
@@ -131,7 +155,7 @@ export class GameController extends Component {
   private createHistoryContent(parent: Node) {
     const content = new Node('HistoryContent');
     const contentT = content.addComponent(UITransform);
-    contentT.setContentSize(CANVAS_W - 40, HISTORY_H - 20);
+    contentT.setContentSize(this.viewW - 40, HISTORY_H - 20);
     contentT.setAnchorPoint(new Vec2(0.5, 1));
     parent.addChild(content);
     this.historyContent = content;
@@ -191,7 +215,7 @@ export class GameController extends Component {
   private createTopArea(parent: Node): Node {
     const area = new Node('TopArea');
     const areaT = area.addComponent(UITransform);
-    areaT.setContentSize(CANVAS_W, TOP_H);
+    areaT.setContentSize(this.viewW, TOP_H);
     areaT.setAnchorPoint(ANCHOR_CENTER);
     parent.addChild(area);
 
@@ -212,13 +236,13 @@ export class GameController extends Component {
   private createHistoryArea(parent: Node): Node {
     const area = new Node('HistoryArea');
     const areaT = area.addComponent(UITransform);
-    areaT.setContentSize(CANVAS_W, HISTORY_H);
+    areaT.setContentSize(this.viewW, HISTORY_H);
     areaT.setAnchorPoint(ANCHOR_CENTER);
     parent.addChild(area);
 
     const content = new Node('HistoryContent');
     const contentT = content.addComponent(UITransform);
-    contentT.setContentSize(CANVAS_W - 40, HISTORY_H - 20);
+    contentT.setContentSize(this.viewW - 40, HISTORY_H - 20);
     contentT.setAnchorPoint(new Vec2(0.5, 1));
     area.addChild(content);
     this.historyContent = content;
@@ -228,7 +252,7 @@ export class GameController extends Component {
   private createInputArea(parent: Node): Node {
     const area = new Node('InputArea');
     const areaT = area.addComponent(UITransform);
-    areaT.setContentSize(CANVAS_W, INPUT_H);
+    areaT.setContentSize(this.viewW, INPUT_H);
     areaT.setAnchorPoint(ANCHOR_CENTER);
     parent.addChild(area);
 
@@ -267,7 +291,7 @@ export class GameController extends Component {
   private createKeyboardArea(parent: Node): Node {
     const area = new Node('KeyboardArea');
     const areaT = area.addComponent(UITransform);
-    areaT.setContentSize(CANVAS_W, KEYBOARD_H);
+    areaT.setContentSize(this.viewW, KEYBOARD_H);
     areaT.setAnchorPoint(ANCHOR_CENTER);
     parent.addChild(area);
     this.keyboardContainer = buildKeyboard(area, {
@@ -340,7 +364,7 @@ export class GameController extends Component {
     if (!this.historyContent) return;
     const count = this.historyContent.children.length;
     const item = new Node(`HistoryItem_${count}`);
-    item.addComponent(UITransform).setContentSize(CANVAS_W - 80, HISTORY_ITEM_HEIGHT);
+    item.addComponent(UITransform).setContentSize(this.viewW - 80, HISTORY_ITEM_HEIGHT);
     item.setPosition(0, -count * HISTORY_ITEM_HEIGHT, 0);
     const label = item.addComponent(Label);
     label.string = `${guess} → ${result}`;
@@ -391,10 +415,22 @@ export class GameController extends Component {
     this.reportMatchFinish(won);
     if (won) GameAudio.playConfirm(); else GameAudio.playError();
     const mask = new Node('PopupMask');
-    mask.addComponent(UITransform).setContentSize(CANVAS_W, CANVAS_H);
+    const maskUt = mask.addComponent(UITransform);
+    maskUt.setContentSize(this.viewW, this.viewH);
+    maskUt.setAnchorPoint(ANCHOR_CENTER);
     mask.setPosition(0, 0, 0);
+    addGradientBg(mask, this.viewW, this.viewH,
+      new Color(0, 0, 20, 200),
+      new Color(0, 0, 8, 230)
+    );
     const box = new Node('ResultBox');
-    box.addComponent(UITransform).setContentSize(320, 180);
+    const boxUt = box.addComponent(UITransform);
+    boxUt.setContentSize(360, 180);
+    boxUt.setAnchorPoint(ANCHOR_CENTER);
+    addGradientBg(box, 360, 180,
+      new Color(55, 40, 90, 255),
+      new Color(30, 22, 55, 255)
+    );
     const iconPath = won ? 'textures/checkmark/spriteFrame' : 'textures/exclamation/spriteFrame';
     const iconNode = new Node('ResultIcon');
     iconNode.addComponent(UITransform).setContentSize(48, 48);
@@ -412,23 +448,42 @@ export class GameController extends Component {
     titleLabel.fontSize = 42;
     titleLabel.color = won ? new Color(100, 255, 100, 255) : new Color(255, 100, 100, 255);
     box.addChild(title);
-    const btnNode = new Node('BtnRetry');
-    btnNode.addComponent(UITransform).setContentSize(120, 44);
-    btnNode.setPosition(0, -50, 0);
-    const btnLabel = new Node('Label');
-    btnLabel.addComponent(UITransform).setContentSize(100, 30);
-    const lbl = btnLabel.addComponent(Label);
-    lbl.string = '再试';
-    lbl.fontSize = 24;
-    lbl.color = new Color(255, 255, 255, 255);
-    btnNode.addChild(btnLabel);
-    btnNode.addComponent(Button);
-    box.addChild(btnNode);
+    const btnRetry = new Node('BtnRetry');
+    btnRetry.addComponent(UITransform).setContentSize(120, 44);
+    btnRetry.setPosition(-70, -50, 0);
+    const lblRetry = new Node('Label');
+    lblRetry.addComponent(UITransform).setContentSize(100, 30);
+    const lr = lblRetry.addComponent(Label);
+    lr.string = '再试';
+    lr.fontSize = 24;
+    lr.color = new Color(255, 255, 255, 255);
+    btnRetry.addChild(lblRetry);
+    btnRetry.addComponent(Button);
+    box.addChild(btnRetry);
+
+    const btnLobby = new Node('BtnLobby');
+    btnLobby.addComponent(UITransform).setContentSize(120, 44);
+    btnLobby.setPosition(70, -50, 0);
+    const lblLobby = new Node('Label');
+    lblLobby.addComponent(UITransform).setContentSize(100, 30);
+    const ll = lblLobby.addComponent(Label);
+    ll.string = '返回大厅';
+    ll.fontSize = 22;
+    ll.color = new Color(255, 255, 255, 255);
+    btnLobby.addChild(lblLobby);
+    btnLobby.addComponent(Button);
+    box.addChild(btnLobby);
+
     (this.gameRoot ?? this.node).addChild(mask);
     mask.addChild(box);
-    btnNode.on(Button.EventType.CLICK, () => {
+
+    btnRetry.on(Button.EventType.CLICK, () => {
       mask.destroy();
       this.startGame();
+    }, this);
+    btnLobby.on(Button.EventType.CLICK, () => {
+      mask.destroy();
+      this.bootstrap?.showLobby();
     }, this);
   }
 }
