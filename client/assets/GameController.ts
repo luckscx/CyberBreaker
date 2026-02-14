@@ -1,7 +1,8 @@
-import { _decorator, Component, Node, Label, Button, UITransform, Color, Vec2, Prefab } from 'cc';
+import { _decorator, Component, Node, Label, Button, UITransform, Color, Vec2, Prefab, Sprite, SpriteFrame, resources } from 'cc';
 import * as OneA2BLogic from './OneA2BLogic';
 import { buildKeyboard } from './DynamicNumpad';
 import { Network } from './Network';
+import { GameAudio } from './GameAudio';
 
 const { ccclass, property } = _decorator;
 
@@ -65,6 +66,7 @@ export class GameController extends Component {
 
   onLoad() {
     if (this.serverUrl) Network.baseUrl = this.serverUrl;
+    if (!this.node.getComponent(GameAudio)) this.node.addComponent(GameAudio);
     const layout = this.findLayoutNodes();
     if (layout) {
       this.gameRoot = null;
@@ -297,12 +299,14 @@ export class GameController extends Component {
 
   onDigit(digit: string) {
     if (this.currentInput.length >= 4) return;
+    GameAudio.playClick();
     this.currentInput += digit;
     this.refreshSlots();
   }
 
   onDel() {
     if (this.currentInput.length === 0) return;
+    GameAudio.playBack();
     this.currentInput = this.currentInput.slice(0, -1);
     this.refreshSlots();
   }
@@ -311,10 +315,12 @@ export class GameController extends Component {
     if (this.currentInput.length !== 4) return;
     const result = OneA2BLogic.evaluate(this.secret, this.currentInput);
     if (result === '') {
+      GameAudio.playError();
       this.currentInput = '';
       this.refreshSlots();
       return;
     }
+    GameAudio.playConfirm();
     if (this.feedbackLabel) this.feedbackLabel.string = result;
     this.appendHistory(this.currentInput, result);
     this.actionTimeline.push({
@@ -383,11 +389,21 @@ export class GameController extends Component {
 
   private showResultPopup(won: boolean) {
     this.reportMatchFinish(won);
+    if (won) GameAudio.playConfirm(); else GameAudio.playError();
     const mask = new Node('PopupMask');
     mask.addComponent(UITransform).setContentSize(CANVAS_W, CANVAS_H);
     mask.setPosition(0, 0, 0);
     const box = new Node('ResultBox');
     box.addComponent(UITransform).setContentSize(320, 180);
+    const iconPath = won ? 'textures/checkmark/spriteFrame' : 'textures/exclamation/spriteFrame';
+    const iconNode = new Node('ResultIcon');
+    iconNode.addComponent(UITransform).setContentSize(48, 48);
+    iconNode.setPosition(-100, 40, 0);
+    const sprite = iconNode.addComponent(Sprite);
+    box.addChild(iconNode);
+    resources.load(iconPath, SpriteFrame, (err, sf) => {
+      if (!err && sf) sprite.spriteFrame = sf;
+    });
     const title = new Node('Title');
     title.addComponent(UITransform).setContentSize(300, 50);
     title.setPosition(0, 40, 0);
