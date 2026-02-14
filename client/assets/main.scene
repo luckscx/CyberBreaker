@@ -82,6 +82,9 @@
       },
       {
         "__id__": 10
+      },
+      {
+        "__id__": 20
       }
     ],
     "_prefab": null,
@@ -580,5 +583,16 @@
   {
     "__type__": "cc.PostSettingsInfo",
     "_toneMappingType": 0
+  },
+  {
+    "__type__": "a1b2c3d4-e5f6-4789-a012-3456789abcde",
+    "_name": "GameController",
+    "_objFlags": 0,
+    "__editorExtras__": {},
+    "node": {
+      "__id__": 2
+    },
+    "_enabled": true,
+    "__prefab": null
   }
 ]

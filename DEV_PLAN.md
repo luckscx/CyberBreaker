@@ -20,19 +20,118 @@
 
 ### 2.1 Client (Cocos 2D + TS)
 
-- **场景与入口**
-  - 保留/整理 `main` 场景为游戏主场景；必要时拆出：登录、大厅、对局、结算。
-  - 入口场景加载后跳转到「大厅」或直接「单机练习」。
-- **1A2B 核心逻辑（纯本地）**
-  - 生成/校验无重复 4 位数字暗码。
-  - 输入：4 位数字输入 UI（可复用/扩展现有 `DynamicNumpad` 思路）。
-  - 判定：单次猜测 → 计算 A/B，返回如 `"1A1B"`。
-  - 胜利条件：一次猜测得到 `4A0B`。
-- **单局流程**
-  - 开局 → 生成暗码 → 循环：输入 → 判定 → 显示反馈 → 若未胜继续。
-  - 简单 UI：当前猜测历史列表 + 最新反馈 + 数字键盘。
-- **倒计时（单机先简化）**
-  - 单回合限时（如 15 秒）或整局限时；超时视为本回合/本局失败，便于后续与幽灵对齐。
+**约定：所有 UI 均通过脚本程序化生成，不依赖在场景编辑器中手摆的 UI 节点。** 场景内仅保留必要的 Canvas 与一个挂载「入口脚本」的节点，由该脚本在 `onLoad` 中创建整棵 UI 树并挂载逻辑。
+
+---
+
+#### 2.1.1 场景与入口（程序化前提）
+
+- **main 场景内容**
+  - 仅保留：Canvas（含 Canvas 组件、Widget 铺满）、一个子节点如 `GameRoot`，挂载入口脚本（如 `GameBootstrap` 或 `GameController`）。
+  - 不预先创建任何按钮、Label、键盘等 UI；全部由代码在运行时创建。
+- **入口脚本职责**
+  - `onLoad()`：创建本局所需全部 UI 根节点（见下），挂载/引用各功能组件，调用「开始一局」。
+  - 可选：入口里只做「大厅」根节点，再提供「进入单机练习」按钮（同样程序化生成），点击后销毁大厅节点、创建对局节点并开始对局。
+
+---
+
+#### 2.1.2 UI 树结构（脚本创建的节点层级）
+
+以下节点均在入口脚本（或由其调用的工厂方法）中 `new Node()` 并 `addChild` 生成，不列在场景里。
+
+```
+Canvas
+└── GameRoot (Node, 挂载布局/锚点逻辑)
+    ├── TopArea          // 顶部区域
+    │   ├── TimerLabel    // 倒计时 Label
+    │   └── HintLabel     // 可选：回合/状态提示
+    ├── HistoryArea      // 猜测历史
+    │   └── HistoryContent (Node，子节点为多条 HistoryItem)
+    │       ├── HistoryItem_0 (Label 或 Node+多 Label)
+    │       ├── HistoryItem_1
+    │       └── ...
+    ├── InputArea        // 当前输入与反馈
+    │   ├── SlotContainer (Node，4 个子节点表示 4 个数字槽)
+    │   │   ├── Slot_0 (Label 或 Node+Label)
+    │   │   ├── Slot_1
+    │   │   ├── Slot_2
+    │   │   └── Slot_3
+    │   └── FeedbackLabel // 最近一次 1A2B 反馈
+    └── KeyboardArea     // 数字键盘
+        └── KeyboardContainer (参考现有 DynamicNumpad 的 buildKeyboard)
+            └── Key_1, Key_2, ... Key_0, Key_Del, Key_OK
+```
+
+- **布局方式**：各 Area 用 `UITransform.setContentSize` + `setPosition` 或配合 `Widget` 组件做简单上下/左右排布，数值可在脚本内写死常量，便于后续调参。
+- **Label 与 Button**：所有文字均为 `Node + Label`，所有可点击键为 `Node + Button`（及可选 Label 子节点），样式如 `fontSize`、`color` 在脚本中设置。
+
+---
+
+#### 2.1.3 程序化生成步骤（按实现顺序）
+
+**Step 1：根节点与区域骨架**
+
+- 在入口脚本中创建 `GameRoot`，再依次创建 `TopArea`、`HistoryArea`、`InputArea`、`KeyboardArea`，并设置各自 `UITransform` 的 contentSize 与 position，使四块在屏幕上大致分区（上、中上、中下、下）。
+- 可抽成独立方法如 `createTopArea(parent)`、`createHistoryArea(parent)` 等，返回根 Node，便于维护。
+
+**Step 2：倒计时 Label（TopArea）**
+
+- 在 `TopArea` 下 `new Node('TimerLabel')`，`addComponent(Label)`，如显示 `"15"` 或 `"0:15"`。
+- 在游戏逻辑中每帧或定时（如 `schedule` 每秒）更新 `timerLabel.string`；单回合 15 秒则每秒减 1，到 0 触发超时逻辑（本回合失败/结束）。
+
+**Step 3：数字键盘与当前输入联动（KeyboardArea + InputArea）**
+
+- **键盘**：复用或移植现有 `DynamicNumpad` 的 `buildKeyboard()` 思路，在 `KeyboardArea` 下用循环创建 `Key_1`～`Key_0`、`Key_Del`、`Key_OK`（Node + Button + Label），点击时不再 `console.log`，而是调用「输入服务」或直接调用 GameController 的方法。
+- **输入槽**：在 `InputArea` 下创建 `SlotContainer`，其下 4 个节点 `Slot_0`～`Slot_3`，每个挂 Label，初始为 `""` 或 `"_"`。数字键按下时在「当前输入缓冲区」追加一位（最多 4 位），并刷新 4 个 Slot 的 Label；Del 退格；OK 提交。
+- **提交时**：读缓冲区得到 4 位字符串，交给 1A2B 判定逻辑；根据返回值更新 FeedbackLabel 并写入历史（见下）。
+
+**Step 4：1A2B 核心逻辑（纯本地，与 UI 解耦）**
+
+- 可在单独脚本或 GameController 内实现：
+  - **生成暗码**：`generateSecret(): string`，无重复 4 位数字（如从 "0123456789" 随机取 4 个）。
+  - **判定**：`evaluate(secret: string, guess: string): string`，返回 `"xAyB"`（如 `"1A1B"`）；若 `guess.length !== 4` 或含重复数字可返回 `""` 或约定错误码。
+  - **胜利条件**：`evaluate` 返回 `"4A0B"` 即本局胜利。
+- 不依赖任何场景节点，仅输入/输出字符串，便于单测与后续幽灵对局复用。
+
+**Step 5：反馈与猜测历史（InputArea + HistoryArea）**
+
+- **FeedbackLabel**：提交后把 `evaluate` 的返回值写入 `FeedbackLabel.string`（如 `"1A1B"`）。
+- **历史列表**：每次提交后，在 `HistoryContent` 下 `new Node`，添加 Label（或多个 Label）组成一行，如 `"4712 → 1A1B"`，并设置该行的 position（如按 index 递减 y 偏移），实现「最新在顶部」的列表效果。若需滚动，可后续给 `HistoryContent` 外包一层 ScrollView（同样用脚本创建 Node + ScrollView 组件）。
+
+**Step 6：单局流程与胜负**
+
+- **开局**：入口脚本或「开始对局」时调用 `generateSecret()` 存于内存，清空 HistoryContent 子节点、清空输入槽与 FeedbackLabel，重置倒计时（如 15），开始计时。
+- **循环**：用户输入 4 位 → OK → `evaluate` → 更新 Feedback 与历史；若为 `4A0B` 则弹出胜利（可程序化生成一个弹窗 Node+Label+Button），并结束本局；若超时则失败，同样可弹窗提示。
+- **再玩一局**：弹窗上「再试」按钮由脚本创建，点击后再次执行开局逻辑（重新生成暗码、清空 UI、重置计时）。
+
+---
+
+#### 2.1.4 脚本与职责划分建议
+
+| 脚本/模块 | 职责 |
+|-----------|------|
+| **GameBootstrap / GameController** | 挂于 GameRoot；onLoad 里创建整棵 UI 树，持有各 Area 及 Label/Button 的引用；驱动「开始一局」「提交」「超时」「胜利/失败」流程。 |
+| **OneA2BLogic**（或同文件内方法） | 仅负责 `generateSecret()`、`evaluate(secret, guess)`，无 Cocos 依赖。 |
+| **KeyboardBuilder**（或沿用 DynamicNumpad） | 接收回调 `onDigit(digit)`、`onDelete()`、`onConfirm()`，在指定 parent 下程序化生成键盘节点并绑定事件。 |
+| **HistoryListHelper** | 接收「追加一条记录」接口，在传入的 HistoryContent 节点下创建并排列 HistoryItem 节点。 |
+
+键盘与历史可先内联在 GameController 中，待稳定后再拆出。
+
+---
+
+#### 2.1.5 资源与样式（保持程序化）
+
+- **字体/贴图**：若使用 TTF 或 Sprite 贴图，通过 `resources.load` / AssetManager 在运行时加载，在创建 Label 或 Sprite 时赋值；若暂无资源，Label 使用引擎默认字体，Button 使用默认过渡即可。
+- **纯色块**：可用 `Graphics` 组件绘制矩形作为背景，或使用引擎自带白色 sprite 配合 `SpriteFrame` 设置 color。不依赖场景里拖拽的图片节点。
+- **尺寸与位置**：所有数值（如 keyWidth、keyHeight、fontSize、各 Area 的 y 偏移）均在脚本中常量或配置对象中定义，便于统一调整。
+
+---
+
+#### 2.1.6 验收标准（P0 Client）
+
+- 进入 main 场景后，所有可见 UI（倒计时、历史列表、4 位输入槽、反馈、数字键盘）均由代码生成，场景中无手摆的对应节点。
+- 可完整玩一局：输入 4 位 → 提交 → 显示 1A2B 与历史；直到猜出 4A0B 或超时；胜利/失败有明确提示；可再开一局。
+- 倒计时从 15 秒递减，到 0 触发超时逻辑。
 
 ### 2.2 Server (Node.js + TS)
 
