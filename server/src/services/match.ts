@@ -3,7 +3,7 @@ import { connectDb } from '../db.js';
 import { GhostMatchRecord } from '../models/GhostMatchRecord.js';
 import { Player } from '../models/Player.js';
 
-const MMR_RANGE = 100;
+const MMR_RANGE = 200;
 
 interface ActionItem {
   timestamp: number;

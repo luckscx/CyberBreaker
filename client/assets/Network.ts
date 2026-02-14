@@ -121,4 +121,21 @@ export class Network {
   static async getGhost(): Promise<ApiResponse<GhostRecord>> {
     return this.request<GhostRecord>('/api/v1/match/ghost', { method: 'GET' });
   }
+
+  /** 排行榜：GET /api/v1/leaderboard?page=1&limit=20 */
+  static async getLeaderboard(page = 1, limit = 20): Promise<ApiResponse<LeaderboardResult>> {
+    return this.request<LeaderboardResult>(`/api/v1/leaderboard?page=${page}&limit=${limit}`, { method: 'GET' });
+  }
+}
+
+export interface LeaderboardItem {
+  playerId: string;
+  mmr: number;
+}
+
+export interface LeaderboardResult {
+  list: LeaderboardItem[];
+  total: number;
+  page: number;
+  limit: number;
 }

@@ -1,11 +1,13 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import morgan from 'morgan';
 import { connectDb } from './db.js';
 import { healthRouter } from './routes/health.js';
 import { apiRouter } from './routes/index.js';
 
 const app = express();
+app.use(morgan('combined'));
 app.use(cors());
 app.use(express.json());
 

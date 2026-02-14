@@ -1,7 +1,7 @@
 import { _decorator, Component, Node, Label, Button, UITransform, Color, Vec2, Prefab, Sprite, SpriteFrame, resources } from 'cc';
 import * as OneA2BLogic from './OneA2BLogic';
 import { buildKeyboard } from './DynamicNumpad';
-import { Network } from './Network';
+import { Network, type GhostRecord } from './Network';
 import { GameAudio } from './GameAudio';
 import { addGradientBg } from './GradientBg';
 
@@ -40,6 +40,7 @@ export interface ActionTimelineItem {
 
 export interface IViewBootstrap {
   showLobby(): void;
+  showLeaderboard(): void;
 }
 
 @ccclass('GameController')
@@ -57,6 +58,12 @@ export class GameController extends Component {
     this.bootstrap = b;
   }
 
+  private ghostRecord: GhostRecord | null = null;
+
+  setGhostRecord(record: GhostRecord | null) {
+    this.ghostRecord = record;
+  }
+
   private gameRoot: Node | null = null;
   private topArea: Node | null = null;
   private historyArea: Node | null = null;
@@ -68,6 +75,7 @@ export class GameController extends Component {
   private historyContent: Node | null = null;
   private slotLabels: Label[] = [];
   private feedbackLabel: Label | null = null;
+  private ghostStepLabel: Label | null = null;
 
   private viewW = DESIGN_W;
   private viewH = DESIGN_H;
@@ -102,12 +110,11 @@ export class GameController extends Component {
       root.setPosition(isUnderBattleRoot ? 0 : cx, isUnderBattleRoot ? 0 : halfH, 0);
       root.setScale(UI_SCALE, UI_SCALE, 1);
       this.gameRoot = root;
-      // 从屏幕底部往上排：键盘贴底，输入区在键盘上，历史在上，倒计时在顶部（适配手机竖屏）
-      // 倒计时 y 需除以 UI_SCALE，缩放后才不会超出父节点顶部被裁掉
+      // 倒计时在顶部，历史在倒计时正下方；键盘贴底，输入区在键盘上方
+      const yTop = (halfH - TOP_MARGIN - TOP_H / 2) / UI_SCALE;
+      const yHist = yTop - TOP_H / 2 - SECTION_GAP - HISTORY_H / 2;
       const yKb = -halfH + KEYBOARD_H / 2 + BOTTOM_MARGIN;
       const yIn = yKb + KEYBOARD_H / 2 + SECTION_GAP + INPUT_H / 2;
-      const yHist = yIn + INPUT_H / 2 + SECTION_GAP + HISTORY_H / 2;
-      const yTop = (halfH - TOP_MARGIN - TOP_H / 2) / UI_SCALE;
       this.topArea = this.createTopArea(root);
       this.topArea.setPosition(0, yTop, 0);
       this.historyArea = this.createHistoryArea(root);
@@ -116,6 +123,17 @@ export class GameController extends Component {
       this.inputArea.setPosition(0, yIn, 0);
       this.keyboardArea = this.createKeyboardArea(root);
       this.keyboardArea.setPosition(0, yKb, 0);
+      if (this.ghostRecord) {
+        const ghostNode = new Node('GhostStep');
+        ghostNode.addComponent(UITransform).setContentSize(this.viewW - 80, 28);
+        ghostNode.setPosition(0, yHist + HISTORY_H / 2 + 15, 0);
+        const gl = ghostNode.addComponent(Label);
+        gl.string = '对手: —';
+        gl.fontSize = 22;
+        gl.color = new Color(200, 200, 255, 255);
+        root.addChild(ghostNode);
+        this.ghostStepLabel = gl;
+      }
     }
     this.ensureLoginThenStart();
   }
@@ -218,6 +236,22 @@ export class GameController extends Component {
     areaT.setContentSize(this.viewW, TOP_H);
     areaT.setAnchorPoint(ANCHOR_CENTER);
     parent.addChild(area);
+
+    const btnBack = new Node('BtnBackLobby');
+    btnBack.addComponent(UITransform).setContentSize(100, 40);
+    // GameRoot 有 UI_SCALE，左侧超出父节点会被裁掉，按钮 x 需在可视范围内
+    const visibleLeft = -this.viewW / 2 / UI_SCALE;
+    btnBack.setPosition(visibleLeft + 55, 0, 0);
+    const lblBack = new Node('Label');
+    lblBack.addComponent(UITransform).setContentSize(90, 28);
+    const lBack = lblBack.addComponent(Label);
+    lBack.string = '返回大厅';
+    lBack.fontSize = 22;
+    lBack.color = new Color(255, 255, 255, 255);
+    btnBack.addChild(lblBack);
+    btnBack.addComponent(Button);
+    area.addChild(btnBack);
+    btnBack.on(Button.EventType.CLICK, () => this.bootstrap?.showLobby(), this);
 
     const timerNode = new Node('TimerLabel');
     const timerT = timerNode.addComponent(UITransform);
@@ -405,10 +439,30 @@ export class GameController extends Component {
     if (this.historyContent) {
       this.historyContent.removeAllChildren();
     }
+    if (this.ghostStepLabel) this.ghostStepLabel.string = '对手: —';
     this.timerRemain = ROUND_SEC;
     if (this.timerLabel) this.timerLabel.string = String(ROUND_SEC);
     this.unschedule(this.onTimerTick);
     this.schedule(this.onTimerTick, 1);
+    if (this.ghostRecord?.actionTimeline?.length) {
+      this.scheduleGhostReplay();
+    }
+  }
+
+  private scheduleGhostReplay() {
+    const timeline = this.ghostRecord!.actionTimeline;
+    const start = this.gameStartTime;
+    timeline.forEach((item) => {
+      const delay = Math.max(0, item.timestamp - (Date.now() - start)) / 1000;
+      this.scheduleOnce(() => {
+        if (this.gameStartTime !== start) return;
+        if (this.ghostStepLabel) this.ghostStepLabel.string = `对手: ${item.guessCode} → ${item.result}`;
+        if (item.result === '4A0B') {
+          this.unschedule(this.onTimerTick);
+          this.showResultPopup(false);
+        }
+      }, delay);
+    });
   }
 
   private showResultPopup(won: boolean) {
@@ -425,9 +479,9 @@ export class GameController extends Component {
     );
     const box = new Node('ResultBox');
     const boxUt = box.addComponent(UITransform);
-    boxUt.setContentSize(360, 180);
+    boxUt.setContentSize(360, 220);
     boxUt.setAnchorPoint(ANCHOR_CENTER);
-    addGradientBg(box, 360, 180,
+    addGradientBg(box, 360, 220,
       new Color(55, 40, 90, 255),
       new Color(30, 22, 55, 255)
     );
@@ -450,7 +504,7 @@ export class GameController extends Component {
     box.addChild(title);
     const btnRetry = new Node('BtnRetry');
     btnRetry.addComponent(UITransform).setContentSize(120, 44);
-    btnRetry.setPosition(-70, -50, 0);
+    btnRetry.setPosition(-100, -40, 0);
     const lblRetry = new Node('Label');
     lblRetry.addComponent(UITransform).setContentSize(100, 30);
     const lr = lblRetry.addComponent(Label);
@@ -463,7 +517,7 @@ export class GameController extends Component {
 
     const btnLobby = new Node('BtnLobby');
     btnLobby.addComponent(UITransform).setContentSize(120, 44);
-    btnLobby.setPosition(70, -50, 0);
+    btnLobby.setPosition(100, -40, 0);
     const lblLobby = new Node('Label');
     lblLobby.addComponent(UITransform).setContentSize(100, 30);
     const ll = lblLobby.addComponent(Label);
@@ -473,6 +527,19 @@ export class GameController extends Component {
     btnLobby.addChild(lblLobby);
     btnLobby.addComponent(Button);
     box.addChild(btnLobby);
+
+    const btnRank = new Node('BtnRank');
+    btnRank.addComponent(UITransform).setContentSize(120, 44);
+    btnRank.setPosition(0, -85, 0);
+    const lblRank = new Node('Label');
+    lblRank.addComponent(UITransform).setContentSize(100, 30);
+    const lRank = lblRank.addComponent(Label);
+    lRank.string = '排行榜';
+    lRank.fontSize = 22;
+    lRank.color = new Color(255, 255, 255, 255);
+    btnRank.addChild(lblRank);
+    btnRank.addComponent(Button);
+    box.addChild(btnRank);
 
     (this.gameRoot ?? this.node).addChild(mask);
     mask.addChild(box);
@@ -484,6 +551,10 @@ export class GameController extends Component {
     btnLobby.on(Button.EventType.CLICK, () => {
       mask.destroy();
       this.bootstrap?.showLobby();
+    }, this);
+    btnRank.on(Button.EventType.CLICK, () => {
+      mask.destroy();
+      this.bootstrap?.showLeaderboard?.();
     }, this);
   }
 }

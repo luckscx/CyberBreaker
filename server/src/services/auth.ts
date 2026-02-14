@@ -21,7 +21,8 @@ export const authService = {
     try {
       const decoded = jwt.verify(token, JWT_SECRET) as { playerId?: string };
       return decoded.playerId ?? null;
-    } catch {
+    } catch (e) {
+      process.stderr.write(`[auth] verifyToken failed: ${(e as Error).message}\n`);
       return null;
     }
   },

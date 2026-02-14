@@ -361,7 +361,7 @@
     "_id": "c5V1EV8IpMtrIvY1OE9t2u"
   },
   {
-    "__type__": "a1b2c3d4-e5f6-4789-a012-3456789abcde",
+    "__type__": "GameController",
     "_name": "GameController",
     "_objFlags": 0,
     "node": {

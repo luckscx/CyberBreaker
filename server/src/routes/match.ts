@@ -28,7 +28,7 @@ matchRouter.get('/ghost', authMiddleware, async (req, res) => {
   try {
     const playerId = (req as unknown as { playerId?: string }).playerId!;
     const ghost = await matchService.getGhostRecord(playerId);
-    if (!ghost) return res.status(404).json(err(404, 'no ghost record'));
+    if (!ghost) return res.status(404).json(err(404, 'no ghost record. run: pnpm run seed'));
     res.json(ok(ghost));
   } catch (e) {
     res.status(500).json(err(500, (e as Error).message));

@@ -17,26 +17,52 @@ export class GameAudio extends Component {
   private static _ins: GameAudio | null = null;
   private _source: AudioSource | null = null;
   private _clips: Partial<Record<keyof typeof PATHS, AudioClip>> = {};
+  private _loading = false;
+  private _loadDone = false;
 
   onLoad() {
     GameAudio._ins = this;
     this._source = this.getComponent(AudioSource) ?? this.addComponent(AudioSource);
-    this.loadAll();
   }
 
   onDestroy() {
     if (GameAudio._ins === this) GameAudio._ins = null;
   }
 
-  private loadAll() {
-    (Object.keys(PATHS) as (keyof typeof PATHS)[]).forEach((key) => {
+  private loadAll(cb?: () => void) {
+    if (this._loadDone) { cb?.(); return; }
+    if (this._loading) {
+      const check = () => {
+        if (this._loadDone) cb?.();
+        else this.scheduleOnce(check, 0.1);
+      };
+      this.scheduleOnce(check, 0.1);
+      return;
+    }
+    this._loading = true;
+    const keys = Object.keys(PATHS) as (keyof typeof PATHS)[];
+    let done = 0;
+    const onOne = () => {
+      done++;
+      if (done >= keys.length) {
+        this._loading = false;
+        this._loadDone = true;
+        cb?.();
+      }
+    };
+    keys.forEach((key) => {
       resources.load(PATHS[key], AudioClip, (err, clip) => {
         if (!err && clip) this._clips[key] = clip;
+        onOne();
       });
     });
   }
 
   private play(key: keyof typeof PATHS, volume = 1) {
+    if (!this._loadDone) {
+      this.loadAll(() => this.play(key, volume));
+      return;
+    }
     const clip = this._clips[key];
     if (this._source && clip) this._source.playOneShot(clip, volume);
   }
