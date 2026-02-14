@@ -13,11 +13,5 @@ app.use('/health', healthRouter);
 app.use('/api/v1', apiRouter);
 
 const PORT = Number(process.env.PORT) || 3000;
-connectDb()
-  .then(() => {
-    app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
-  })
-  .catch((e) => {
-    console.error('DB connect failed', e);
-    process.exit(1);
-  });
+app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+connectDb().catch((e) => console.error('DB connect failed (API will fail until DB is up):', e));
