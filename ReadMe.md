@@ -1,49 +1,56 @@
-# 潜行解码 (Cyber Breaker) - H5 异步对抗解谜游戏
+# 潜行解码 (Cyber Breaker)
 
-## 📖 项目简介
-《潜行解码》是一款基于经典“猜数字 (1A2B)”逻辑的快节奏 H5 竞技小游戏。通过引入倒计时机制与独创的**异步幽灵匹配系统 (Asynchronous Ghost Matchmaking)**，玩家可以随时随地体验与真实玩家“同台竞技”的紧张感，彻底解决 H5 游戏初期的冷启动与实时匹配等待难题。
+基于「猜数字 1A2B」逻辑的 H5 小游戏：支持单机练习与双人房间对战。
 
-## 🛠 技术栈选型 (Tech Stack)
-* **游戏引擎 (Client)**：Cocos Creator 3.x + TypeScript
-  * *优势*：完善的组件化开发流，跨平台能力极强，一键发布 Web H5 及微信/抖音等各大平台小游戏。
-* **服务端 (Server)**：Node.js + TypeScript 
-  * *优势*：事件驱动与非阻塞 I/O，极适合处理轻量级、高并发的对局匹配与数据上报。
-* **数据库 (Database)**：MongoDB (存储玩家持久化数据与幽灵对局记录) + Redis (可选，用于热点匹配池和排队缓存)。
-* **通信协议**：HTTP (用于登录、结算上报) + WebSocket (可选，若后期加入强实时互动或观战功能)。
+## 游戏模式
 
-## 🎮 核心玩法机制
-1. **暗码设定**：系统生成或玩家预设一个无重复的 4 位数字（如：4079）。
-2. **交替破译**：双方在限定时间（如单回合 15 秒）内交替输入猜测。
-3. **精准反馈**：
-   - **A (完全正确)**：数字猜中且位置正确。
-   - **B (位置错误)**：数字猜中但位置不对。
-   - *示例：密码 4079，猜 4712 -> 反馈 1A1B。*
-4. **异步高压竞速**：你并不是在和 AI 玩，而是在和数据库中另一位真实玩家的**历史通关切片**赛跑。先达成 4A0B 者获胜。
+| 模式 | 说明 |
+|------|------|
+| **单机模式** | 本地游玩，系统随机 4 位不重复数字，玩家在本地完成猜数字，无服务端对局。 |
+| **房间模式** | 创建房间后获得分享链接，另一人通过链接加入。双方各自设定暗码，通过 WebSocket 实时轮流猜对方密码，先猜中 4A 者胜。 |
 
-## ✨ 创新特性：幽灵匹配与技能系统
-* **幽灵回放匹配 (Ghost Data Match)**：
-  服务端拉取与当前玩家 MMR（隐藏分）相近的历史玩家通关记录。前端根据记录中的时间戳，通过 Cocos 定时器“重播”对手的猜测行为（包括输入停顿、错误尝试），营造极强的伪实时 PVP 压迫感。
-* **战术技能槽 (Tactical Skills)**：
-  打破纯数学逻辑的枯燥。猜出 A 或 B 均可积攒能量，满额可释放技能：
-  - *绝对透视*：暴露敌方一个确切数字及位置。
-  - *时间冻结*：锁死自己的倒计时 10 秒，获得思考喘息期。
-  - *系统干扰*：让“幽灵对手”的下一次判定延迟 5 秒生效。
+### 1A2B 规则简述
 
-## 🗄️ 核心数据结构设计 (Draft)
-为了实现幽灵匹配，服务端需要保存精准的对局切片记录：
+- **A**：数字与位置都正确  
+- **B**：数字正确但位置错误  
+- 示例：密码 `4079`，猜测 `4712` → 反馈 `1A1B`
 
-```typescript
-// 幽灵对局记录数据模型 (GhostMatchRecord)
-interface GhostMatchRecord {
-  recordId: string;       // 记录唯一ID
-  playerId: string;       // 产生此记录的玩家ID
-  targetCode: string;     // 本局目标密码 (如 "4079")
-  totalTimeMs: number;    // 破译总耗时 (毫秒)
-  mmrSnapshot: number;    // 玩家当时的匹配分数
-  actionTimeline: {       // 行为时间轴 (用于前端重播)
-    timestamp: number;    // 距离开局的毫秒数
-    guessCode: string;    // 猜测的数字
-    result: string;       // 反馈结果 (如 "1A1B")
-    usedSkill?: string;   // 是否在此刻使用了技能
-  }[];
-}
+## 技术栈
+
+- **前端 (web)**：Pixi.js + Vite + TypeScript，纯 H5
+- **服务端 (server)**：Node.js + Express + TypeScript，HTTP API + WebSocket
+- **房间**：内存存储（无持久化），WebSocket 路径 `/ws/room/:roomId`，支持 host/guest 角色
+
+## 项目结构
+
+```
+CyberBreaker/
+├── web/          # 前端：首页 → 单机(GuessScene) / 房间(创建→RoomWait→RoomPlay)
+├── server/       # 服务端：/api/v1/room、/ws/room/:roomId
+```
+
+## 本地运行
+
+**服务端**
+
+```bash
+cd server && pnpm install && pnpm run dev
+```
+
+默认 `http://localhost:3000`，需先启动再玩房间模式。
+
+**前端**
+
+```bash
+cd web && pnpm install && pnpm run dev
+```
+
+首页选「单机模式」无需服务端；选「创建房间」需服务端已启动。另一人通过 `?room=房间ID` 链接加入房间。
+
+## 房间 API 摘要
+
+- `POST /api/v1/room/create`：创建房间，返回 `roomId`、`joinUrl`、`wsPath`
+- `GET /api/v1/room/:roomId`：查询房间状态
+- WebSocket `ws://host/ws/room/:roomId?role=host|guest`：设暗码、轮流猜、判胜
+
+（后续可扩展：幽灵对战、MMR、MongoDB/Redis 等。）
