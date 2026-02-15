@@ -1,10 +1,11 @@
 import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
 import { Button } from "@/components/Button";
-import { playClick } from "@/audio/click";
-import { isBgmPaused, toggleBgmPaused } from "@/audio/bgm";
-import { RoomClient, type RoomRole } from "@/room/client";
-import { isValidGuess } from "@/logic/guess";
+import { KeyButton } from "@/components/KeyButton";
+import { MusicToggle } from "@/components/MusicToggle";
+import { BackButton } from "@/components/BackButton";
+import { RoomClient, type RoomRole, type RoomRule } from "@/room/client";
+import { isValidGuessForRule } from "@/logic/guess";
 
 interface Particle {
   g: Graphics;
@@ -14,15 +15,15 @@ interface Particle {
   maxLife: number;
 }
 
-const SLOT_SIZE = 48;
-const SLOT_GAP = 10;
-const KEY_SIZE = 48;
+const SLOT_SIZE = 50;
+const SLOT_GAP = 8;
+const KEY_SIZE = 64;
 const KEY_GAP = 8;
-const KEYPAD_COLS = 4;
-const KEYPAD_ROWS = 3;
+const KEYPAD_COLS = 3;
+const KEYPAD_ROWS = 4;
 const KEYPAD_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
 const RADIUS = 8;
-const TURN_SEC = 15;
+const TURN_SEC = 60;
 
 export interface RoomPlaySceneOptions {
   app: Application;
@@ -30,7 +31,16 @@ export interface RoomPlaySceneOptions {
   myRole: RoomRole;
   initialTurn: RoomRole;
   turnStartAt: number;
+  rule: RoomRule;
+  joinUrl?: string;
   onBack: () => void;
+  /** 重连时的历史记录 */
+  history?: {
+    role: RoomRole;
+    guess: string;
+    result: string;
+    timestamp: number;
+  }[];
 }
 
 export class RoomPlayScene extends Container {
@@ -39,7 +49,7 @@ export class RoomPlayScene extends Container {
   private countdownText: Text;
   private slotContainer: Container;
   private currentGuess = "";
-  private digitButtons: Button[] = [];
+  private digitButtons: KeyButton[] = [];
   private myHistoryText: Text;
   private peerHistoryText: Text;
   private resultText: Text;
@@ -57,91 +67,108 @@ export class RoomPlayScene extends Container {
   private gameOverStartTime = 0;
   private gameOverParticles: Particle[] = [];
   private gameOverTickerBound: ((ticker: { deltaMS: number }) => void) | null = null;
+  private rule: RoomRule;
+  private myItemUsed = false;
+  private peerItemUsed = false;
+  private itemBtn: Button | null = null;
+  private itemEffectText: Text | null = null;
+  private static readonly ITEM_REDUCE_SEC = 20;
 
   constructor(opts: RoomPlaySceneOptions) {
     super();
-    const { app, client, myRole, initialTurn, turnStartAt, onBack } = opts;
+    const { app, client, myRole, initialTurn, turnStartAt, rule, joinUrl, onBack, history } = opts;
     this.app = app;
     this.client = client;
     this.myRole = myRole;
     this.turn = initialTurn;
     this.turnStartAt = turnStartAt;
+    this.rule = rule;
     const w = app.screen.width;
     const cx = w / 2;
 
-    const back = new Button({
-      label: "返回",
-      width: 72,
+    // 恢复历史记录（如果是重连）
+    if (history && history.length > 0) {
+      console.log(`[RoomPlayScene] restoring ${history.length} history records`);
+      history.forEach((record) => {
+        const line = `${record.guess} → ${record.result}`;
+        if (record.role === myRole) {
+          this.myHistory.push(line);
+        } else {
+          this.peerHistory.push(line);
+        }
+      });
+    }
+
+    // Update browser URL to joinUrl for easy sharing
+    if (joinUrl && typeof window !== "undefined") {
+      try {
+        const url = new URL(joinUrl);
+        window.history.replaceState({}, "", url.pathname + url.search);
+      } catch (e) {
+        console.warn("Failed to update URL:", e);
+      }
+    }
+
+    const backButton = new BackButton({
+      x: 16 + 24,
+      y: 16 + 24,
       onClick: () => {
-        playClick();
         onBack();
       },
     });
-    back.x = 60;
-    back.y = 50;
-    this.addChild(back);
+    this.addChild(backButton);
 
     const margin = 16;
-    const musicBtn = new Button({
-      label: isBgmPaused() ? "音乐关" : "音乐开",
-      width: 72,
-      fontSize: 14,
-      onClick: () => {
-        playClick();
-        toggleBgmPaused();
-        musicBtn.setLabel(isBgmPaused() ? "音乐关" : "音乐开");
-      },
+    const toggleSize = 48;
+    const musicToggle = new MusicToggle({
+      x: w - margin - toggleSize,
+      y: margin,
     });
-    musicBtn.x = w - margin - musicBtn.width / 2;
-    musicBtn.y = margin + musicBtn.height / 2;
-    this.addChild(musicBtn);
+    this.addChild(musicToggle);
 
     this.turnText = new Text({
       text: this.turn === myRole ? "你的回合" : "对方回合",
-      style: { fontFamily: "system-ui", fontSize: 20, fill: this.turn === myRole ? 0x00ffcc : 0xffaa44 },
+      style: { fontFamily: "system-ui", fontSize: 18, fill: this.turn === myRole ? 0x00ffcc : 0xffaa44 },
     });
     this.turnText.anchor.set(0.5);
     this.turnText.x = cx - 50;
-    this.turnText.y = 95;
+    this.turnText.y = 80;
     this.addChild(this.turnText);
 
     this.countdownText = new Text({
       text: String(TURN_SEC),
-      style: { fontFamily: "system-ui", fontSize: 18, fill: 0xffaa44 },
+      style: { fontFamily: "system-ui", fontSize: 16, fill: 0xffaa44 },
     });
     this.countdownText.anchor.set(0.5);
-    this.countdownText.x = cx + 55;
-    this.countdownText.y = 95;
+    this.countdownText.x = cx + 50;
+    this.countdownText.y = 80;
     this.addChild(this.countdownText);
 
     const secLabel = new Text({
       text: "秒",
-      style: { fontFamily: "system-ui", fontSize: 12, fill: 0x888888 },
+      style: { fontFamily: "system-ui", fontSize: 11, fill: 0x888888 },
     });
     secLabel.anchor.set(0, 0.5);
-    secLabel.x = cx + 72;
-    secLabel.y = 95;
+    secLabel.x = cx + 65;
+    secLabel.y = 80;
     this.addChild(secLabel);
 
     this.slotContainer = this._buildSlots();
     this.slotContainer.x = cx - (4 * SLOT_SIZE + 3 * SLOT_GAP) / 2 + SLOT_SIZE / 2 + SLOT_GAP / 2;
-    this.slotContainer.y = 135;
+    this.slotContainer.y = 115;
     this.addChild(this.slotContainer);
 
-    const keypadY = 210;
+    const keypadY = 180;
     const keypadW = KEYPAD_COLS * KEY_SIZE + (KEYPAD_COLS - 1) * KEY_GAP;
     KEYPAD_DIGITS.forEach((digit, i) => {
       const row = Math.floor(i / KEYPAD_COLS);
       const col = i % KEYPAD_COLS;
-      const btn = new Button({
+      const btn = new KeyButton({
         label: String(digit),
         width: KEY_SIZE,
         height: KEY_SIZE,
-        fontSize: 20,
-        fillColor: 0x1a2636,
-        fillHover: 0x2a3648,
+        fontSize: 22,
         onClick: () => {
-          playClick();
           this._addDigit(digit);
         },
       });
@@ -153,55 +180,92 @@ export class RoomPlayScene extends Container {
 
     const confirmBtn = new Button({
       label: "确认",
-      width: 90,
+      width: 85,
+      fontSize: 14,
       onClick: () => {
-        playClick();
         this._submitGuess();
       },
     });
-    confirmBtn.x = cx - 50;
-    confirmBtn.y = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 12;
+    confirmBtn.x = cx - 48;
+    confirmBtn.y = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 10;
     this.addChild(confirmBtn);
 
     const backspaceBtn = new Button({
       label: "退格",
-      width: 90,
+      width: 85,
+      fontSize: 14,
       onClick: () => {
-        playClick();
         this._backspace();
       },
     });
-    backspaceBtn.x = cx + 50;
-    backspaceBtn.y = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 12;
+    backspaceBtn.x = cx + 48;
+    backspaceBtn.y = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 10;
     this.addChild(backspaceBtn);
 
     this.resultText = new Text({
       text: "",
-      style: { fontFamily: "system-ui", fontSize: 16, fill: 0x88ff88 },
+      style: { fontFamily: "system-ui", fontSize: 14, fill: 0x88ff88 },
     });
     this.resultText.anchor.set(0.5, 0);
     this.resultText.x = cx;
-    this.resultText.y = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 55;
+    this.resultText.y = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 38;
     this.addChild(this.resultText);
 
-    const historyY = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 85;
-    const colGap = 24;
+    const historyY = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 58;
+    const colGap = 20;
     this.myHistoryText = new Text({
-      text: "我的猜测：\n",
-      style: { fontFamily: "system-ui", fontSize: 13, fill: 0x00ccaa },
+      text: this.myHistory.length > 0
+        ? "我的猜测：\n" + this.myHistory.join("\n")
+        : "我的猜测：\n",
+      style: { fontFamily: "system-ui", fontSize: 12, fill: 0x00ccaa },
     });
     this.myHistoryText.anchor.set(0, 0);
     this.myHistoryText.x = colGap;
     this.myHistoryText.y = historyY;
     this.addChild(this.myHistoryText);
     this.peerHistoryText = new Text({
-      text: "对方猜测：\n",
-      style: { fontFamily: "system-ui", fontSize: 13, fill: 0xffaa66 },
+      text: this.peerHistory.length > 0
+        ? "对方猜测：\n" + this.peerHistory.join("\n")
+        : "对方猜测：\n",
+      style: { fontFamily: "system-ui", fontSize: 12, fill: 0xffaa66 },
     });
     this.peerHistoryText.anchor.set(0, 0);
     this.peerHistoryText.x = w / 2 + colGap;
     this.peerHistoryText.y = historyY;
     this.addChild(this.peerHistoryText);
+
+    // 道具按钮 & 说明：放在页面最底部
+    const h = app.screen.height;
+
+    const itemHint = new Text({
+      text: "对手回合 -20秒",
+      style: { fontFamily: "system-ui", fontSize: 11, fill: 0x668899 },
+    });
+    itemHint.anchor.set(0.5);
+    itemHint.x = cx;
+    itemHint.y = h - 58;
+    this.addChild(itemHint);
+
+    this.itemBtn = new Button({
+      label: "⚡ 减时道具（1次）",
+      width: 140,
+      fontSize: 12,
+      onClick: () => {
+        this._useItem();
+      },
+    });
+    this.itemBtn.x = cx;
+    this.itemBtn.y = h - 32;
+    this.addChild(this.itemBtn);
+
+    this.itemEffectText = new Text({
+      text: "",
+      style: { fontFamily: "system-ui", fontSize: 13, fill: 0xff6644, fontWeight: "bold" },
+    });
+    this.itemEffectText.anchor.set(0.5);
+    this.itemEffectText.x = cx;
+    this.itemEffectText.y = h - 75;
+    this.addChild(this.itemEffectText);
 
     this._refreshSlots();
     this._startCountdown();
@@ -242,7 +306,7 @@ export class RoomPlayScene extends Container {
       text: won ? "你赢了！" : "你输了",
       style: {
         fontFamily: "system-ui",
-        fontSize: 52,
+        fontSize: 44,
         fontWeight: "bold",
         fill: won ? 0x00ffcc : 0xff4466,
       },
@@ -255,7 +319,7 @@ export class RoomPlayScene extends Container {
 
     const sub = new Text({
       text: won ? "恭喜获胜" : "对方先猜中",
-      style: { fontFamily: "system-ui", fontSize: 20, fill: won ? 0x88ffaa : 0xaa6688 },
+      style: { fontFamily: "system-ui", fontSize: 18, fill: won ? 0x88ffaa : 0xaa6688 },
     });
     sub.anchor.set(0.5);
     sub.x = cx;
@@ -361,7 +425,68 @@ export class RoomPlayScene extends Container {
     this._startCountdown();
   }
 
+  private _useItem(): void {
+    if (this.myItemUsed || this.gameOver) return;
+    this.client.useItem();
+  }
+
+  private _onItemUsed(byRole: RoomRole): void {
+    if (byRole === this.myRole) {
+      // 我方使用：标记已用，禁用按钮
+      this.myItemUsed = true;
+      if (this.itemBtn) {
+        this.itemBtn.setLabel("已使用");
+        this.itemBtn.eventMode = "none";
+        this.itemBtn.alpha = 0.4;
+      }
+    } else {
+      // 对方使用：标记对方已用
+      this.peerItemUsed = true;
+    }
+
+    if (byRole !== this.myRole) {
+      // 对方对我使用 → 我当前回合立即减 20 秒（把 turnStartAt 往前推）
+      this.turnStartAt -= RoomPlayScene.ITEM_REDUCE_SEC * 1000;
+      this._startCountdown(); // 立刻刷新倒计时
+      this._showItemEffect("对方使用了⚡减时！-20s");
+    } else {
+      // 我对对方使用（对方的倒计时由对方客户端处理，我这边也前推保持同步）
+      this.turnStartAt -= RoomPlayScene.ITEM_REDUCE_SEC * 1000;
+      this._startCountdown();
+      this._showItemEffect("⚡已对对方使用减时！");
+    }
+  }
+
+  private _showItemEffect(text: string): void {
+    if (!this.itemEffectText) return;
+    this.itemEffectText.text = text;
+    this.itemEffectText.alpha = 1;
+    // 3 秒后淡出
+    let fadeTimer: ReturnType<typeof setInterval> | null = null;
+    const startFade = setTimeout(() => {
+      let alpha = 1;
+      fadeTimer = setInterval(() => {
+        alpha -= 0.05;
+        if (alpha <= 0) {
+          if (this.itemEffectText) {
+            this.itemEffectText.alpha = 0;
+            this.itemEffectText.text = "";
+          }
+          if (fadeTimer) clearInterval(fadeTimer);
+        } else {
+          if (this.itemEffectText) this.itemEffectText.alpha = alpha;
+        }
+      }, 50);
+    }, 2000);
+    // 避免内存泄漏（场景销毁时会清理 children）
+    void startFade;
+  }
+
   private _onMsg(msg: { type: string; role?: RoomRole; nextTurn?: RoomRole; turnStartAt?: number; guess?: string; result?: string; winner?: RoomRole; error?: string }): void {
+    if (msg.type === "item_used") {
+      if (msg.role) this._onItemUsed(msg.role);
+      return;
+    }
     if (msg.type === "turn_switch") {
       if (msg.nextTurn != null) this._applyTurnSwitch(msg.nextTurn, msg.turnStartAt ?? Date.now());
       return;
@@ -402,7 +527,7 @@ export class RoomPlayScene extends Container {
       c.addChild(box);
       const text = new Text({
         text: "?",
-        style: { fontFamily: "system-ui", fontSize: 22, fill: 0x00ffcc },
+        style: { fontFamily: "system-ui", fontSize: 20, fill: 0x00ffcc },
       });
       text.anchor.set(0.5);
       text.x = i * (SLOT_SIZE + SLOT_GAP);
@@ -419,7 +544,8 @@ export class RoomPlayScene extends Container {
       if (t) t.text = digits[i] ?? "?";
     }
     this.digitButtons.forEach((btn, i) => {
-      btn.visible = !this.currentGuess.includes(String(KEYPAD_DIGITS[i]));
+      if (this.rule === "position_only") btn.visible = true;
+      else btn.visible = !this.currentGuess.includes(String(KEYPAD_DIGITS[i]));
     });
   }
 
@@ -430,7 +556,8 @@ export class RoomPlayScene extends Container {
 
   private _addDigit(d: number): void {
     if (this.turn !== this.myRole) return;
-    if (this.currentGuess.length >= 4 || this.currentGuess.includes(String(d))) return;
+    if (this.currentGuess.length >= 4) return;
+    if (this.rule === "standard" && this.currentGuess.includes(String(d))) return;
     this.currentGuess += d;
     this.resultText.text = "";
     this._refreshSlots();
@@ -444,7 +571,7 @@ export class RoomPlayScene extends Container {
   }
 
   private _submitGuess(): void {
-    if (this.turn !== this.myRole || !isValidGuess(this.currentGuess)) return;
+    if (this.turn !== this.myRole || !isValidGuessForRule(this.currentGuess, this.rule)) return;
     this.client.guess(this.currentGuess);
     this.currentGuess = "";
     this._refreshSlots();

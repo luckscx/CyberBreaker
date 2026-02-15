@@ -2,6 +2,14 @@
 
 基于「猜数字 1A2B」逻辑的 H5 小游戏：支持单机练习与双人房间对战。
 
+## ✨ 核心特性
+
+- 🎮 **单机练习模式**: 本地挑战，快速上手
+- 🔗 **联机对战模式**: 创建房间，分享链接，实时 PVP
+- 🔄 **断线重连**: 刷新页面自动恢复游戏进度（基于 UUID）
+- 🎯 **多种规则**: 标准 1A2B / 位置赛模式
+- 🎵 **音效系统**: 背景音乐 + 点击反馈
+
 ## 游戏模式
 
 | 模式 | 说明 |
@@ -49,7 +57,7 @@ cd web && pnpm install && pnpm run dev
 
 ## 🚀 生产部署
 
-项目已部署到生产环境：**http://nu.grissom.cn**
+项目已部署到生产环境：**https://nu.grissom.cn**
 
 ### 一键部署脚本
 
@@ -66,8 +74,9 @@ cd web && pnpm install && pnpm run dev
 ## 📚 文档
 
 - [CLAUDE.md](./CLAUDE.md) - 项目架构和开发指南
-- [DEPLOYMENT.md](./DEPLOYMENT.md) - 部署运维文档
-- [DEPLOY_GUIDE.md](./DEPLOY_GUIDE.md) - 部署脚本使用说明
+- [RECONNECT_FEATURE.md](./RECONNECT_FEATURE.md) - 断线重连功能说明
+- [RECONNECT_TEST_GUIDE.md](./RECONNECT_TEST_GUIDE.md) - 断线重连测试指南
+- [web/src/utils/UUID_README.md](./web/src/utils/UUID_README.md) - UUID 系统文档
 
 ## 房间 API 摘要
 

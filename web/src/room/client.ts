@@ -1,12 +1,17 @@
 import { getWsUrl } from "@/api/room";
+import { getUserUUID } from "@/utils/uuid";
 
 export type RoomRole = "host" | "guest";
+
+/** standard: 4 位不重复 1A2B；position_only: 数字可重复，只反馈位置正确个数 */
+export type RoomRule = "standard" | "position_only";
 
 export interface RoomMsg {
   type: string;
   roomId?: string;
   role?: RoomRole;
   state?: string;
+  rule?: RoomRule;
   message?: string;
   turn?: RoomRole;
   nextTurn?: RoomRole;
@@ -18,6 +23,17 @@ export interface RoomMsg {
   guestCodeSet?: boolean;
   /** 服务器下发的本回合开始时间戳（毫秒），用于双方统一倒计时 */
   turnStartAt?: number;
+  hostItemUsed?: boolean;
+  guestItemUsed?: boolean;
+  /** 是否为重连 */
+  isReconnect?: boolean;
+  /** 游戏历史记录 */
+  history?: {
+    role: RoomRole;
+    guess: string;
+    result: string;
+    timestamp: number;
+  }[];
 }
 
 export class RoomClient {
@@ -35,18 +51,30 @@ export class RoomClient {
 
   connect(roomId: string, role: RoomRole): Promise<void> {
     return new Promise((resolve, reject) => {
-      const url = getWsUrl(roomId, role);
+      const userUUID = getUserUUID(); // 获取用户 UUID
+      const url = getWsUrl(roomId, role, userUUID);
+      console.log(`[RoomClient] connecting to ${roomId} as ${role} with UUID ${userUUID}`);
       this.ws = new WebSocket(url);
       this._role = role;
-      this.ws.onopen = () => resolve();
-      this.ws.onerror = () => reject(new Error("连接失败"));
+      this.ws.onopen = () => {
+        console.log('[RoomClient] connected');
+        resolve();
+      };
+      this.ws.onerror = () => {
+        console.log('[RoomClient] connection error');
+        reject(new Error("连接失败"));
+      };
       this.ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data as string) as RoomMsg;
+          if (msg.type === 'room_joined' && msg.isReconnect) {
+            console.log('[RoomClient] reconnected successfully, history length:', msg.history?.length ?? 0);
+          }
           this.listeners.forEach((fn) => fn(msg));
         } catch {}
       };
       this.ws.onclose = () => {
+        console.log('[RoomClient] connection closed');
         this.ws = null;
         this._role = null;
       };
@@ -75,6 +103,12 @@ export class RoomClient {
   turnTimeout(): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: "turn_timeout" }));
+    }
+  }
+
+  useItem(): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "use_item" }));
     }
   }
 

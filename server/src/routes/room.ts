@@ -5,10 +5,11 @@ import { ok, err } from '../types.js';
 export const roomRouter = Router();
 
 roomRouter.post('/create', (req, res) => {
-  const { roomId, room } = createRoom();
+  const rule = req.body?.rule === 'position_only' ? 'position_only' : 'standard';
+  const { roomId, room } = createRoom(rule);
   const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
   const joinUrl = `${baseUrl.replace(/\/$/, '')}/play?room=${roomId}`;
-  res.json(ok({ roomId, joinUrl, wsPath: `/ws/room/${roomId}` }));
+  res.json(ok({ roomId, joinUrl, wsPath: `/ws/room/${roomId}`, rule: room.rule }));
 });
 
 roomRouter.get('/:roomId', (req, res) => {
@@ -17,6 +18,7 @@ roomRouter.get('/:roomId', (req, res) => {
   res.json(ok({
     roomId: room.roomId,
     state: room.state,
+    rule: room.rule,
     hasHost: !!room.host,
     hasGuest: !!room.guest,
     joinUrl: `${process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`}`.replace(/\/$/, '') + `/play?room=${room.roomId}`,

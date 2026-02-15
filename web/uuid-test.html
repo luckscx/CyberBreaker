@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UUID 测试 - Cyber Breaker</title>
+  <style>
+    body {
+      font-family: 'SF Pro Text', system-ui, -apple-system, sans-serif;
+      max-width: 700px;
+      margin: 50px auto;
+      padding: 20px;
+      background: linear-gradient(135deg, #0d1520, #1a2332);
+      color: #e0e0e0;
+    }
+    .card {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(0, 255, 204, 0.3);
+      border-radius: 12px;
+      padding: 24px;
+      margin: 20px 0;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+    h1 {
+      color: #00ffcc;
+      text-align: center;
+      font-size: 28px;
+      margin-bottom: 10px;
+    }
+    h2 {
+      color: #00ffcc;
+      font-size: 18px;
+      margin-bottom: 12px;
+    }
+    .uuid-display {
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 16px;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 12px;
+      border-radius: 6px;
+      border-left: 3px solid #00ffcc;
+      word-break: break-all;
+      margin: 12px 0;
+    }
+    button {
+      background: linear-gradient(135deg, #00cc99, #00ffcc);
+      color: #0d1520;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      margin: 8px 8px 8px 0;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0, 255, 204, 0.4);
+    }
+    button:active {
+      transform: translateY(0);
+    }
+    .status {
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: bold;
+      margin: 8px 0;
+    }
+    .status.new {
+      background: rgba(255, 150, 0, 0.2);
+      color: #ffaa44;
+      border: 1px solid #ff9622;
+    }
+    .status.existing {
+      background: rgba(0, 255, 204, 0.2);
+      color: #00ffcc;
+      border: 1px solid #00cc99;
+    }
+    .info {
+      font-size: 14px;
+      color: #99aabb;
+      line-height: 1.6;
+      margin: 12px 0;
+    }
+    .cookie-info {
+      font-size: 12px;
+      color: #7788aa;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 10px;
+      border-radius: 6px;
+      margin: 12px 0;
+    }
+    .highlight {
+      color: #00ffcc;
+      font-weight: bold;
+    }
+    code {
+      background: rgba(0, 0, 0, 0.5);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 12px;
+      color: #ffaa44;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔐 UUID 用户标识测试</h1>
+
+  <div class="card">
+    <h2>当前用户 UUID</h2>
+    <div class="uuid-display" id="uuid-display">加载中...</div>
+    <div id="visit-status"></div>
+    <div class="info">
+      这个 UUID 会自动存储在浏览器 Cookie 中，<span class="highlight">365 天</span>内有效。
+      即使关闭浏览器重新打开，UUID 也会保持不变。
+    </div>
+    <div class="cookie-info">
+      <strong>Cookie 信息:</strong><br>
+      • 名称: <code>cyber_breaker_uuid</code><br>
+      • 有效期: <span id="cookie-expiry">--</span><br>
+      • 域: <code id="cookie-domain">--</code><br>
+      • 路径: <code>/</code>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>操作测试</h2>
+    <button onclick="refreshUUID()">🔄 刷新显示</button>
+    <button onclick="clearUUID()">🗑️ 清除 UUID (模拟新用户)</button>
+    <button onclick="openInNewTab()">🔗 新标签页测试</button>
+    <div class="info" style="margin-top: 16px;">
+      • <strong>刷新显示</strong>: 重新读取 UUID (应该和之前相同)<br>
+      • <strong>清除 UUID</strong>: 删除 Cookie，下次访问会生成新的 UUID<br>
+      • <strong>新标签页测试</strong>: 在新标签页打开，验证 UUID 是否一致
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>技术实现</h2>
+    <div class="info">
+      <strong>UUID 生成算法:</strong> RFC 4122 标准的 UUID v4<br>
+      <strong>存储方式:</strong> HTTP Cookie (非 LocalStorage，支持跨子域)<br>
+      <strong>安全特性:</strong>
+      <ul style="margin: 8px 0; padding-left: 20px;">
+        <li>SameSite=Lax 防止 CSRF 攻击</li>
+        <li>客户端生成，服务端可选验证</li>
+        <li>符合 GDPR/隐私政策 (可清除)</li>
+      </ul>
+      <strong>应用场景:</strong> 匿名统计、游戏存档、个性化设置
+    </div>
+  </div>
+
+  <script type="module">
+    import { getUserUUID, clearUserUUID, isFirstVisit } from './src/utils/uuid.ts';
+
+    function displayUUID() {
+      const isFirst = isFirstVisit();
+      const uuid = getUserUUID();
+      document.getElementById('uuid-display').textContent = uuid;
+
+      const statusDiv = document.getElementById('visit-status');
+      if (isFirst) {
+        statusDiv.innerHTML = '<span class="status new">✨ 首次访问 - 已生成新 UUID</span>';
+      } else {
+        statusDiv.innerHTML = '<span class="status existing">✅ 已有记录 - UUID 从 Cookie 加载</span>';
+      }
+
+      // 显示 Cookie 过期时间
+      const cookies = document.cookie.split('; ');
+      const uuidCookie = cookies.find(c => c.startsWith('cyber_breaker_uuid='));
+      if (uuidCookie) {
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + 365);
+        document.getElementById('cookie-expiry').textContent = expiryDate.toLocaleDateString('zh-CN');
+      }
+      document.getElementById('cookie-domain').textContent = window.location.hostname;
+    }
+
+    window.refreshUUID = () => {
+      displayUUID();
+      alert('✅ UUID 已刷新显示');
+    };
+
+    window.clearUUID = () => {
+      if (confirm('确定要清除当前 UUID 吗？\n下次页面加载时会生成新的 UUID。')) {
+        clearUserUUID();
+        alert('🗑️ UUID 已清除，刷新页面后将生成新的 UUID');
+        setTimeout(() => location.reload(), 1000);
+      }
+    };
+
+    window.openInNewTab = () => {
+      window.open(window.location.href, '_blank');
+    };
+
+    // 页面加载时自动显示
+    displayUUID();
+
+    // 控制台输出调试信息
+    console.log('%c🔐 Cyber Breaker UUID System', 'font-size: 16px; font-weight: bold; color: #00ffcc');
+    console.log('UUID:', getUserUUID());
+    console.log('Is First Visit:', isFirstVisit());
+    console.log('All Cookies:', document.cookie);
+  </script>
+</body>
+</html>

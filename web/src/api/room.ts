@@ -1,13 +1,21 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
+/** standard: 4 位不重复 1A2B；position_only: 数字可重复，只反馈位置正确个数 */
+export type RoomRule = "standard" | "position_only";
+
 export interface CreateRoomRes {
   roomId: string;
   joinUrl: string;
   wsPath: string;
+  rule: RoomRule;
 }
 
-export async function createRoom(): Promise<CreateRoomRes> {
-  const res = await fetch(`${API_BASE}/api/v1/room/create`, { method: "POST" });
+export async function createRoom(rule: RoomRule = "standard"): Promise<CreateRoomRes> {
+  const res = await fetch(`${API_BASE}/api/v1/room/create`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rule }),
+  });
   if (!res.ok) throw new Error("创建房间失败");
   const data = await res.json();
   if (!data?.data) throw new Error(data?.error ?? "创建房间失败");
@@ -26,9 +34,10 @@ export async function getRoom(roomId: string): Promise<{ roomId: string; state: 
   return data.data;
 }
 
-export function getWsUrl(roomId: string, role: "host" | "guest"): string {
+export function getWsUrl(roomId: string, role: "host" | "guest", userUUID?: string): string {
   const base = import.meta.env.VITE_WS_BASE ?? (typeof window !== "undefined" ? window.location.origin : "");
   const wsProto = base.startsWith("https") ? "wss" : "ws";
   const host = base.replace(/^https?:\/\//, "").replace(/\/$/, "");
-  return `${wsProto}://${host}/ws/room/${roomId}?role=${role}`;
+  const uuidParam = userUUID ? `&uuid=${encodeURIComponent(userUUID)}` : "";
+  return `${wsProto}://${host}/ws/room/${roomId}?role=${role}${uuidParam}`;
 }

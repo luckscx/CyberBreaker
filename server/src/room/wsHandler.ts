@@ -8,13 +8,18 @@ import {
   nextTurn,
   computeAB,
   deleteRoom,
+  addGuessHistory,
+  canReconnect,
   type Room,
   type RoomRole,
+  type RoomRule,
 } from './store.js';
 
 const CODE_REG = /^[0-9]{4}$/;
-function isValidCode(s: string): boolean {
-  return CODE_REG.test(s) && new Set(s).size === 4;
+function isValidCode(s: string, rule: RoomRule): boolean {
+  if (!CODE_REG.test(s)) return false;
+  if (rule === 'standard') return new Set(s).size === 4;
+  return true;
 }
 
 function payloadToObj(payload: unknown): Record<string, unknown> {
@@ -45,6 +50,8 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
   const match = path.match(/^\/ws\/room\/([^/]+)$/);
   const roomId = match?.[1];
   const role = (searchParams.get('role') ?? 'guest') as RoomRole;
+  const userUUID = searchParams.get('uuid') ?? undefined;
+
   if (!roomId || !['host', 'guest'].includes(role)) {
     console.log('[WS room] invalid path or role roomId=%s role=%s', roomId, role);
     send(ws, 'error', { message: 'invalid path or role' });
@@ -59,9 +66,23 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
     ws.close();
     return;
   }
-  console.log('[WS room] join roomId=%s role=%s', roomId, role);
 
-  const player = { ws, role, playerId: undefined as string | undefined, nickname: undefined as string | undefined };
+  // 检查是否为重连
+  const isReconnect = userUUID ? canReconnect(room, userUUID, role) : false;
+  if (isReconnect) {
+    console.log('[WS room] reconnect detected roomId=%s role=%s uuid=%s', roomId, role, userUUID);
+  } else {
+    console.log('[WS room] join roomId=%s role=%s uuid=%s', roomId, role, userUUID ?? '(none)');
+  }
+
+  const player = {
+    ws,
+    role,
+    playerId: undefined as string | undefined,
+    nickname: undefined as string | undefined,
+    userUUID,
+    lastActiveAt: Date.now(),
+  };
   if (role === 'host') {
     if (!setHost(roomId, player)) {
       console.log('[WS room] join failed roomId=%s role=host (already has host)', roomId);
@@ -73,8 +94,15 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
       roomId,
       role: 'host',
       state: room.state,
+      rule: room.rule,
       hostCodeSet: !!room.hostCode,
       guestCodeSet: !!room.guestCode,
+      hostItemUsed: room.hostItemUsed,
+      guestItemUsed: room.guestItemUsed,
+      isReconnect,
+      history: room.history,
+      turn: room.turn,
+      turnStartAt: Date.now(), // 重连时使用当前时间
     });
     if (room.guest) {
       send(ws, 'peer_joined', {});
@@ -91,13 +119,22 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
       roomId,
       role: 'guest',
       state: room.state,
+      rule: room.rule,
       hostCodeSet: !!room.hostCode,
       guestCodeSet: !!room.guestCode,
+      hostItemUsed: room.hostItemUsed,
+      guestItemUsed: room.guestItemUsed,
+      isReconnect,
+      history: room.history,
+      turn: room.turn,
+      turnStartAt: Date.now(),
     });
     if (room.host) {
       send(room.host.ws, 'peer_joined', {});
     }
-    broadcast(room, 'game_start', { message: 'both connected, set your code' });
+    if (!isReconnect) {
+      broadcast(room, 'game_start', { message: 'both connected, set your code' });
+    }
   }
 
   ws.on('message', (raw) => {
@@ -115,9 +152,9 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
     switch (data.type) {
       case 'set_code': {
         const code = data.code;
-        if (!code || !isValidCode(code)) {
+        if (!code || !isValidCode(code, room.rule)) {
           console.log('[WS room] set_code invalid roomId=%s role=%s code=%s', roomId, role, code ?? '(missing)');
-          send(ws, 'error', { message: 'invalid code, need 4 unique digits' });
+          send(ws, 'error', { message: room.rule === 'standard' ? 'invalid code, need 4 unique digits' : 'invalid code, need 4 digits' });
           return;
         }
         setCode(room, role, code);
@@ -131,7 +168,7 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
         if (bothSet) {
           console.log('[WS room] both codes set, game_start roomId=%s', roomId);
           startGame(room);
-          broadcast(room, 'game_start', { turn: room.turn, turnStartAt: Date.now() });
+          broadcast(room, 'game_start', { turn: room.turn, turnStartAt: Date.now(), rule: room.rule });
         }
         break;
       }
@@ -141,7 +178,7 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
           return;
         }
         const guess = data.guess;
-        if (!guess || !isValidCode(guess)) {
+        if (!guess || !isValidCode(guess, room.rule)) {
           send(ws, 'error', { message: 'invalid guess' });
           return;
         }
@@ -152,7 +189,11 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
         }
         const { a, b } = computeAB(target, guess);
         nextTurn(room);
-        const result = `${a}A${b}B`;
+        const result = room.rule === 'position_only' ? `${a}A` : `${a}A${b}B`;
+
+        // 记录到历史
+        addGuessHistory(room, role, guess, result);
+
         broadcast(room, 'guess_result', {
           role,
           guess,
@@ -164,6 +205,22 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
           broadcast(room, 'game_over', { winner: role });
           closeRoom(roomId, room);
         }
+        break;
+      }
+      case 'use_item': {
+        if (room.state !== 'playing') {
+          send(ws, 'error', { message: 'game not started' });
+          return;
+        }
+        const used = role === 'host' ? room.hostItemUsed : room.guestItemUsed;
+        if (used) {
+          send(ws, 'error', { message: 'item already used' });
+          return;
+        }
+        if (role === 'host') room.hostItemUsed = true;
+        else room.guestItemUsed = true;
+        console.log('[WS room] use_item roomId=%s role=%s', roomId, role);
+        broadcast(room, 'item_used', { role });
         break;
       }
       case 'turn_timeout': {
@@ -190,7 +247,20 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
     const room = getRoom(roomId);
     if (room) {
       broadcast(room, 'peer_left', { role }, ws);
-      closeRoom(roomId, room);
+      // 不立即删除房间，允许 30 秒内重连
+      console.log('[WS room] player disconnected, room kept for reconnection roomId=%s role=%s', roomId, role);
+      // 30 秒后清理房间（如果仍然有断线的玩家）
+      setTimeout(() => {
+        const currentRoom = getRoom(roomId);
+        if (currentRoom) {
+          const hostConnected = currentRoom.host?.ws?.readyState === 1;
+          const guestConnected = currentRoom.guest?.ws?.readyState === 1;
+          if (!hostConnected && !guestConnected) {
+            console.log('[WS room] timeout cleanup roomId=%s (both disconnected)', roomId);
+            closeRoom(roomId, currentRoom);
+          }
+        }
+      }, 30000); // 30 秒超时
     }
   });
 
