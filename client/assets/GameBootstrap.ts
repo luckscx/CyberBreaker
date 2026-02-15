@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, Label, Button, UITransform, Color, Vec2, Widget } from 'cc';
+import { _decorator, Component, Node, Label, Button, UITransform, Color, Vec2, Widget, Prefab, instantiate } from 'cc';
 import { GameController } from './GameController';
 import { Network, type GhostRecord } from './Network';
 import { GameAudio } from './GameAudio';
@@ -28,6 +28,9 @@ export type BattleMode = 'solo' | 'ghost';
 /** 方式 A：单场景入口，切换 LobbyRoot / BattleRoot（对局）/ Result 由 GameController 弹窗处理 */
 @ccclass('GameBootstrap')
 export class GameBootstrap extends Component {
+  @property(Prefab)
+  buttonPrefab: Prefab | null = null;
+
   private currentRoot: Node | null = null;
 
   onLoad() {
@@ -76,8 +79,8 @@ export class GameBootstrap extends Component {
     addGradientBg(root, w, h, LOBBY_TOP, LOBBY_BOTTOM, { diagonal: true });
 
     const title = new Node('Title');
-    title.addComponent(UITransform).setContentSize(500, 90);
-    title.setPosition(0, 120, 0);
+    title.addComponent(UITransform).setContentSize(600, 110);
+    title.setPosition(0, 240, 0);
     const titleL = title.addComponent(Label);
     titleL.string = '潜行解码';
     titleL.fontSize = 72;
@@ -211,11 +214,23 @@ export class GameBootstrap extends Component {
     addGradientBg(battleRoot, w, h, BATTLE_TOP, BATTLE_BOTTOM);
 
     const gc = battleRoot.addComponent(GameController);
+    if (this.buttonPrefab) gc.setButtonPrefab(this.buttonPrefab);
     gc.setBootstrap(this);
     if (mode === 'ghost' && ghostRecord) gc.setGhostRecord(ghostRecord);
   }
 
   private createMenuButton(text: string, yOffset: number): Node {
+    if (this.buttonPrefab) {
+      const btn = instantiate(this.buttonPrefab);
+      btn.name = 'Btn_' + text;
+      btn.setPosition(0, yOffset, 0);
+      const ut = btn.getComponent(UITransform);
+      if (ut) ut.setContentSize(280, 70);
+      const labelNode = btn.getChildByName('Label');
+      const l = labelNode?.getComponent(Label);
+      if (l) l.string = text;
+      return btn;
+    }
     const btn = new Node('Btn_' + text);
     btn.addComponent(UITransform).setContentSize(280, 70);
     btn.setPosition(0, yOffset, 0);

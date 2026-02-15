@@ -58,6 +58,10 @@ export class GameController extends Component {
     this.bootstrap = b;
   }
 
+  setButtonPrefab(prefab: Prefab | null) {
+    this.buttonPrefab = prefab;
+  }
+
   private ghostRecord: GhostRecord | null = null;
 
   setGhostRecord(record: GhostRecord | null) {
