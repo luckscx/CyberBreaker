@@ -208,11 +208,15 @@ export function gpPickQuestion(room: Room, questionId: number, role: RoomRole): 
   return { question: q.question, answer: q.answer };
 }
 
-/** 检查猜测的人名是否正确 */
+/** 人名比较时规范化：去首尾空格、去掉中间点（·） */
+function normalizePersonName(s: string): string {
+  return s.trim().replace(/[·•．.]/g, '');
+}
+
+/** 检查猜测的人名是否正确（忽略首尾空格与中间点） */
 export function gpCheckName(room: Room, name: string): boolean {
   if (!room.gpPerson) return false;
-  // 去掉首尾空格后全匹配
-  return name.trim() === room.gpPerson.name;
+  return normalizePersonName(name) === normalizePersonName(room.gpPerson.name);
 }
 
 /** 记录一次错误猜测，同时更新冷却时间 */

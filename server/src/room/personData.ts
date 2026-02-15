@@ -201,7 +201,7 @@ export function getCachedPersonNames(): string[] {
 
 /**
  * 获取一个角色：
- * 1. 若缓存 ≥5 个，50% 概率直接从缓存取（省时省钱）
+ * 1. 若缓存 ≥5 个，80% 概率直接从缓存取（省时省钱）
  * 2. 否则调用 LLM 生成，成功后自动存缓存
  * 3. LLM 失败则从缓存取
  * 4. 缓存也没有则用内置静态角色
@@ -209,8 +209,8 @@ export function getCachedPersonNames(): string[] {
 export async function getRandomPerson(): Promise<PersonCharacter> {
   const cached = cacheSize();
 
-  // 缓存充足时一定概率复用
-  if (cached >= 5 && Math.random() < 0.5) {
+  // 缓存充足时80%概率复用（只有20%概率调用LLM）
+  if (cached >= 5 && Math.random() < 0.8) {
     const fromCache = loadRandomFromCache();
     if (fromCache) return fromCache;
   }

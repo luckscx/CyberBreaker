@@ -108,8 +108,8 @@ export class RoomGuessPersonScene extends Container {
 
     // Back button
     const backButton = new BackButton({
-      x: 16 + 24,
-      y: 16 + 24,
+      x: 16,
+      y: 16,
       onClick: () => onBack(),
     });
     this.addChild(backButton);
@@ -125,26 +125,26 @@ export class RoomGuessPersonScene extends Container {
     });
     this.titleText.anchor.set(0.5);
     this.titleText.x = cx;
-    this.titleText.y = 68;
+    this.titleText.y = 58;
     this.addChild(this.titleText);
 
     const ruleHint = new Text({
       text: "轮流选题获取线索，抢先猜对人名即获胜",
-      style: { fontFamily: "system-ui", fontSize: 12, fill: 0x668899 },
+      style: { fontFamily: "system-ui", fontSize: 11, fill: 0x668899 },
     });
     ruleHint.anchor.set(0.5);
     ruleHint.x = cx;
-    ruleHint.y = 84;
+    ruleHint.y = 78;
     this.addChild(ruleHint);
 
-    // Turn indicator + countdown
+    // Turn indicator + countdown（与规则留出整行间距）
     this.turnText = new Text({
       text: this.turn === myRole ? "你来选题" : "对方选题",
       style: { fontFamily: "system-ui", fontSize: 14, fill: this.turn === myRole ? 0x00ffcc : 0xffaa44 },
     });
     this.turnText.anchor.set(0.5);
     this.turnText.x = cx - 45;
-    this.turnText.y = 92;
+    this.turnText.y = 102;
     this.addChild(this.turnText);
 
     this.countdownText = new Text({
@@ -153,7 +153,7 @@ export class RoomGuessPersonScene extends Container {
     });
     this.countdownText.anchor.set(0.5);
     this.countdownText.x = cx + 40;
-    this.countdownText.y = 92;
+    this.countdownText.y = 102;
     this.addChild(this.countdownText);
 
     const secLabel = new Text({
@@ -162,12 +162,12 @@ export class RoomGuessPersonScene extends Container {
     });
     secLabel.anchor.set(0, 0.5);
     secLabel.x = cx + 52;
-    secLabel.y = 92;
+    secLabel.y = 102;
     this.addChild(secLabel);
 
-    // Candidate questions area
+    // Candidate questions area（与回合行、选题提示留足间距）
     this.candidateContainer = new Container();
-    this.candidateContainer.y = 112;
+    this.candidateContainer.y = 158;
     this.addChild(this.candidateContainer);
     this._renderCandidates(candidateQuestions);
 
@@ -178,11 +178,11 @@ export class RoomGuessPersonScene extends Container {
     });
     historyLabel.anchor.set(0.5);
     historyLabel.x = cx;
-    historyLabel.y = 280;
+    historyLabel.y = 308;
     this.addChild(historyLabel);
 
     this.qaHistoryContainer = new Container();
-    this.qaHistoryContainer.y = 298;
+    this.qaHistoryContainer.y = 326;
     this.addChild(this.qaHistoryContainer);
     this._renderQAHistory();
 
@@ -210,15 +210,15 @@ export class RoomGuessPersonScene extends Container {
     // Name input (HTML overlay)
     this._createNameInput(app);
 
-    // Submit button
+    // Submit button（缩小并右移，与输入框留出间隙）
     this.submitBtn = new Button({
       label: "提交猜测",
-      width: 100,
-      fontSize: 13,
+      width: 72,
+      fontSize: 12,
       onClick: () => this._submitGuess(),
     });
-    this.submitBtn.x = cx + 75;
-    this.submitBtn.y = h - 40;
+    this.submitBtn.x = cx + 48;
+    this.submitBtn.y = h - 38;
     this.addChild(this.submitBtn);
 
     // Cooldown text (shown after wrong guess)
@@ -264,18 +264,19 @@ export class RoomGuessPersonScene extends Container {
     input.maxLength = 20;
     input.style.cssText = `
       position: absolute;
-      bottom: 22px;
+      bottom: 24px;
       left: 50%;
-      transform: translateX(-70%);
-      width: 140px;
-      height: 32px;
+      transform: translateX(-100%);
+      margin-right: 10px;
+      width: 120px;
+      height: 28px;
       border: 1px solid #334455;
       border-radius: 6px;
       background: rgba(13, 21, 32, 0.95);
       color: #00ffcc;
-      font-size: 14px;
+      font-size: 13px;
       font-family: system-ui;
-      padding: 0 10px;
+      padding: 0 8px;
       outline: none;
       z-index: 10;
       caret-color: #00ffcc;
@@ -335,7 +336,7 @@ export class RoomGuessPersonScene extends Container {
     questions.forEach((q, i) => {
       const cardH = 36;
       const gap = 6;
-      const y = 20 + i * (cardH + gap);
+      const y = 28 + i * (cardH + gap); // 28 让「选择一个问题提问」与第一张卡片有间距
 
       const card = new Container();
       card.x = cx;
@@ -384,7 +385,7 @@ export class RoomGuessPersonScene extends Container {
   private _renderQAHistory(): void {
     this.qaHistoryContainer.removeChildren();
     const w = this.app.screen.width;
-    const maxH = this.app.screen.height - 298 - 150; // Leave room for input area
+    const maxH = this.app.screen.height - 326 - 150; // Leave room for input area
     const colGap = 12;
 
     if (this.qaHistoryItems.length === 0) {

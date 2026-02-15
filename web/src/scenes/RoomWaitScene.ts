@@ -86,19 +86,18 @@ export class RoomWaitScene extends Container {
     }
 
     const backButton = new BackButton({
-      x: 16 + 24,
-      y: 16 + 24,
+      x: 16,
+      y: 16,
       onClick: () => {
         onBack();
       },
     });
     this.addChild(backButton);
 
-    const margin = 16;
     const toggleSize = 48;
     const musicToggle = new MusicToggle({
-      x: w - margin - toggleSize,
-      y: margin,
+      x: w - 16 - toggleSize,
+      y: 16,
     });
     this.addChild(musicToggle);
 

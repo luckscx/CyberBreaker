@@ -38,8 +38,8 @@ export class LevelSelectScene extends Container {
 
     // 返回按钮（左上角）
     const backButton = new BackButton({
-      x: 16 + 24,
-      y: 16 + 24,
+      x: 16,
+      y: 16,
       onClick: () => {
         this.opts.onBack();
       },
@@ -47,11 +47,10 @@ export class LevelSelectScene extends Container {
     this.addChild(backButton);
 
     // 音乐按钮（右上角）
-    const margin = 16;
     const toggleSize = 48;
     const musicToggle = new MusicToggle({
-      x: width - margin - toggleSize,
-      y: margin,
+      x: width - 16 - toggleSize,
+      y: 16,
     });
     this.addChild(musicToggle);
 

@@ -61,8 +61,8 @@ export class GuessScene extends Container {
     // 顶部按钮区域
     const topMargin = 20;
     const backButton = new BackButton({
-      x: 16 + 24,
-      y: topMargin + 24,
+      x: 16,
+      y: 16,
       onClick: () => {
         opts.onBack();
       },
@@ -72,7 +72,7 @@ export class GuessScene extends Container {
     const toggleSize = 48;
     const musicToggle = new MusicToggle({
       x: w - 16 - toggleSize,
-      y: topMargin,
+      y: 16,
     });
     this.addChild(musicToggle);
 

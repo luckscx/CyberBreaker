@@ -25,11 +25,10 @@ export class HomeScene extends Container {
   }
 
   private _addMusicButton(): void {
-    const margin = 16;
     const toggleSize = 48;
     const musicToggle = new MusicToggle({
-      x: this.app.screen.width - margin - toggleSize,
-      y: margin,
+      x: this.app.screen.width - 16 - toggleSize,
+      y: 16,
     });
     this.addChild(musicToggle);
   }

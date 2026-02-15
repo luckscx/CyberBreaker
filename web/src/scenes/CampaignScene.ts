@@ -96,8 +96,8 @@ export class CampaignScene extends Container {
 
     // 返回按钮（左上角）
     const backButton = new BackButton({
-      x: 25,
-      y: 20,
+      x: 16,
+      y: 16,
       onClick: () => {
         this._stopTimer();
         this.opts.onBack();
@@ -106,11 +106,10 @@ export class CampaignScene extends Container {
     this.addChild(backButton);
 
     // 音乐按钮（右上角）
-    const margin = 16;
     const toggleSize = 48;
     const musicToggle = new MusicToggle({
-      x: width - margin - toggleSize,
-      y: margin,
+      x: width - 16 - toggleSize,
+      y: 16,
     });
     this.addChild(musicToggle);
 
