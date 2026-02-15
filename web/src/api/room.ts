@@ -1,7 +1,7 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
-/** standard: 4 位不重复 1A2B；position_only: 数字可重复，只反馈位置正确个数 */
-export type RoomRule = "standard" | "position_only";
+/** standard: 4 位不重复 1A2B；position_only: 数字可重复，只反馈位置正确个数；guess_person: 猜人名 */
+export type RoomRule = "standard" | "position_only" | "guess_person";
 
 export interface CreateRoomRes {
   roomId: string;

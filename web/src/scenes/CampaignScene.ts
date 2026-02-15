@@ -290,7 +290,7 @@ export class CampaignScene extends Container {
       ["1", "2", "3"],
       ["4", "5", "6"],
       ["7", "8", "9"],
-      ["←", "0", "✓"],
+      ["⌫", "0", "✓"],
     ];
 
     const buttonWidth = 70;
@@ -306,7 +306,7 @@ export class CampaignScene extends Container {
 
     layout.forEach((row, rowIdx) => {
       row.forEach((key, colIdx) => {
-        if (key === "←") {
+        if (key === "⌫") {
           // 退格按钮 - 使用普通 Button
           const btn = new Button({
             label: key,

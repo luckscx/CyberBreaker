@@ -10,6 +10,13 @@ import {
   deleteRoom,
   addGuessHistory,
   canReconnect,
+  gpInitGame,
+  gpRefreshCandidates,
+  gpPickQuestion,
+  gpCheckName,
+  gpAddWrongGuess,
+  gpCooldownRemaining,
+  GP_WRONG_COOLDOWN_MS,
   type Room,
   type RoomRole,
   type RoomRule,
@@ -83,6 +90,16 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
     userUUID,
     lastActiveAt: Date.now(),
   };
+  // 构建 guess_person 模式的额外重连数据
+  const gpReconnectData = (room.rule === 'guess_person' && isReconnect && room.state === 'playing') ? {
+    gpQAHistory: room.gpQAHistory ?? [],
+    gpWrongGuesses: room.gpWrongGuesses ?? [],
+    gpAskedCount: room.gpAskedIds?.size ?? 0,
+    gpTotalQuestions: room.gpPerson?.questions.length ?? 12,
+    gpAllAsked: room.gpAllAsked ?? false,
+    gpCandidateQuestions: (room.gpCandidates ?? []).map((q) => ({ id: q.id, question: q.question })),
+  } : {};
+
   if (role === 'host') {
     if (!setHost(roomId, player)) {
       console.log('[WS room] join failed roomId=%s role=host (already has host)', roomId);
@@ -103,6 +120,7 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
       history: room.history,
       turn: room.turn,
       turnStartAt: Date.now(), // 重连时使用当前时间
+      ...gpReconnectData,
     });
     if (room.guest) {
       send(ws, 'peer_joined', {});
@@ -128,19 +146,38 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
       history: room.history,
       turn: room.turn,
       turnStartAt: Date.now(),
+      ...gpReconnectData,
     });
     if (room.host) {
       send(room.host.ws, 'peer_joined', {});
     }
     if (!isReconnect) {
-      broadcast(room, 'game_start', { message: 'both connected, set your code' });
+      if (room.rule === 'guess_person') {
+        // 猜人名模式：双方连接后，先通知"出题中"，然后异步生成题目
+        broadcast(room, 'gp_generating', { message: 'AI 正在出题，请稍候...' });
+        gpInitGame(room).then(() => {
+          startGame(room);
+          const candidates = gpRefreshCandidates(room);
+          broadcast(room, 'gp_game_start', {
+            turn: room.turn,
+            turnStartAt: Date.now(),
+            totalQuestions: room.gpPerson?.questions.length ?? 12,
+            candidateQuestions: candidates.map((q) => ({ id: q.id, question: q.question })),
+          });
+        }).catch((err) => {
+          console.log('[WS room] gpInitGame failed:', err);
+          broadcast(room, 'error', { message: '出题失败，请重试' });
+        });
+      } else {
+        broadcast(room, 'game_start', { message: 'both connected, set your code' });
+      }
     }
   }
 
   ws.on('message', (raw) => {
     const room = getRoom(roomId);
     if (!room) return;
-    let data: { type?: string; code?: string; guess?: string };
+    let data: { type?: string; code?: string; guess?: string; questionId?: number; name?: string };
     try {
       data = typeof raw === 'string' ? JSON.parse(raw) : JSON.parse(raw.toString());
     } catch {
@@ -234,6 +271,97 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
         }
         nextTurn(room);
         broadcast(room, 'turn_switch', { nextTurn: room.turn, turnStartAt: Date.now() });
+        break;
+      }
+      /* ── guess_person 模式消息 ── */
+      case 'gp_pick_question': {
+        if (room.rule !== 'guess_person' || room.state !== 'playing') {
+          send(ws, 'error', { message: 'not in guess_person game' });
+          return;
+        }
+        if (room.turn !== role) {
+          send(ws, 'error', { message: 'not your turn' });
+          return;
+        }
+        const qId = data.questionId;
+        if (qId == null) {
+          send(ws, 'error', { message: 'missing questionId' });
+          return;
+        }
+        const result = gpPickQuestion(room, qId, role);
+        if (!result) {
+          send(ws, 'error', { message: 'invalid questionId' });
+          return;
+        }
+        console.log('[WS room] gp_pick_question roomId=%s role=%s qId=%d', roomId, role, qId);
+        // 切换回合
+        nextTurn(room);
+        // 刷新下一轮候选题
+        const nextCandidates = gpRefreshCandidates(room);
+        broadcast(room, 'gp_question_answered', {
+          question: result.question,
+          answer: result.answer,
+          askedBy: role,
+          askedCount: room.gpAskedIds?.size ?? 0,
+          totalQuestions: room.gpPerson?.questions.length ?? 12,
+          // 下一轮信息
+          nextTurn: room.turn,
+          turnStartAt: Date.now(),
+          candidateQuestions: nextCandidates.map((q) => ({ id: q.id, question: q.question })),
+          allAsked: room.gpAllAsked ?? false,
+        });
+        break;
+      }
+      case 'gp_guess_name': {
+        if (room.rule !== 'guess_person' || room.state !== 'playing') {
+          send(ws, 'error', { message: 'not in guess_person game' });
+          return;
+        }
+        const guessName = (data.name ?? '').trim();
+        if (!guessName) {
+          send(ws, 'error', { message: 'empty name' });
+          return;
+        }
+        // 检查冷却
+        const cdRemaining = gpCooldownRemaining(room, role);
+        if (cdRemaining > 0) {
+          send(ws, 'error', { message: `冷却中，${Math.ceil(cdRemaining / 1000)}秒后可再猜` });
+          return;
+        }
+        const correct = gpCheckName(room, guessName);
+        console.log('[WS room] gp_guess_name roomId=%s role=%s name=%s correct=%s', roomId, role, guessName, correct);
+        if (correct) {
+          broadcast(room, 'game_over', { winner: role, personName: room.gpPerson?.name });
+          closeRoom(roomId, room);
+        } else {
+          gpAddWrongGuess(room, role, guessName);
+          broadcast(room, 'gp_wrong_guess', {
+            role,
+            name: guessName,
+            cooldownMs: GP_WRONG_COOLDOWN_MS,
+          });
+        }
+        break;
+      }
+      case 'gp_turn_timeout': {
+        if (room.rule !== 'guess_person' || room.state !== 'playing') {
+          send(ws, 'error', { message: 'not in guess_person game' });
+          return;
+        }
+        if (room.turn !== role) {
+          send(ws, 'error', { message: 'not your turn' });
+          return;
+        }
+        console.log('[WS room] gp_turn_timeout roomId=%s role=%s', roomId, role);
+        // 超时不选题，直接切换回合
+        nextTurn(room);
+        const timeoutCandidates = gpRefreshCandidates(room);
+        broadcast(room, 'gp_turn_switch', {
+          nextTurn: room.turn,
+          turnStartAt: Date.now(),
+          candidateQuestions: timeoutCandidates.map((q) => ({ id: q.id, question: q.question })),
+          allAsked: room.gpAllAsked ?? false,
+        });
         break;
       }
       default:

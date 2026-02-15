@@ -1,5 +1,6 @@
 import type { WebSocket } from 'ws';
 import { randomBytes } from 'crypto';
+import { getRandomPerson, pickCandidateQuestions, type PersonCharacter, type PersonQuestion } from './personData.js';
 
 export type RoomRole = 'host' | 'guest';
 
@@ -16,8 +17,8 @@ export interface RoomPlayer {
 
 export type RoomState = 'waiting' | 'playing';
 
-/** standard: 4 位不重复，反馈 1A2B；position_only: 数字可重复，只反馈位置正确的个数 */
-export type RoomRule = 'standard' | 'position_only';
+/** standard: 4 位不重复，反馈 1A2B；position_only: 数字可重复，只反馈位置正确的个数；guess_person: 猜人名 */
+export type RoomRule = 'standard' | 'position_only' | 'guess_person';
 
 export interface Room {
   roomId: string;
@@ -39,6 +40,22 @@ export interface Room {
     result: string;
     timestamp: number;
   }[];
+
+  /* ── guess_person 模式专用字段 ── */
+  /** 当前角色数据 */
+  gpPerson?: PersonCharacter;
+  /** 已提问过的问题 ID 集合 */
+  gpAskedIds?: Set<number>;
+  /** 当前轮候选问题 */
+  gpCandidates?: PersonQuestion[];
+  /** 公开的问答历史 */
+  gpQAHistory?: { question: string; answer: string; askedBy: RoomRole }[];
+  /** 错误猜测记录 */
+  gpWrongGuesses?: { role: RoomRole; name: string }[];
+  /** 是否所有问题已用完 */
+  gpAllAsked?: boolean;
+  /** 猜错后冷却：记录每方最后一次猜错时间戳 */
+  gpLastWrongTime?: { host: number; guest: number };
 }
 
 const rooms = new Map<string, Room>();
@@ -152,4 +169,65 @@ export function canReconnect(room: Room | undefined, userUUID: string, role: Roo
   const player = role === 'host' ? room.host : room.guest;
   if (!player || !player.userUUID) return false;
   return player.userUUID === userUUID;
+}
+
+/* ────── guess_person 模式辅助函数 ────── */
+
+/** 初始化猜人名游戏：选角色、准备第一轮候选题 */
+/** 猜错后冷却秒数 */
+export const GP_WRONG_COOLDOWN_MS = 10_000;
+
+export async function gpInitGame(room: Room): Promise<void> {
+  const person = await getRandomPerson();
+  room.gpPerson = person;
+  room.gpAskedIds = new Set();
+  room.gpQAHistory = [];
+  room.gpWrongGuesses = [];
+  room.gpAllAsked = false;
+  room.gpLastWrongTime = { host: 0, guest: 0 };
+  room.gpCandidates = pickCandidateQuestions(person, room.gpAskedIds);
+}
+
+/** 刷新下一轮候选题（如果还有剩余问题） */
+export function gpRefreshCandidates(room: Room): PersonQuestion[] {
+  if (!room.gpPerson || !room.gpAskedIds) return [];
+  const candidates = pickCandidateQuestions(room.gpPerson, room.gpAskedIds);
+  room.gpCandidates = candidates;
+  if (candidates.length === 0) room.gpAllAsked = true;
+  return candidates;
+}
+
+/** 选择一个问题并记录答案 */
+export function gpPickQuestion(room: Room, questionId: number, role: RoomRole): { question: string; answer: string } | null {
+  if (!room.gpPerson || !room.gpCandidates || !room.gpAskedIds || !room.gpQAHistory) return null;
+  const q = room.gpCandidates.find((c) => c.id === questionId);
+  if (!q) return null;
+  room.gpAskedIds.add(q.id);
+  const entry = { question: q.question, answer: q.answer, askedBy: role };
+  room.gpQAHistory.push(entry);
+  return { question: q.question, answer: q.answer };
+}
+
+/** 检查猜测的人名是否正确 */
+export function gpCheckName(room: Room, name: string): boolean {
+  if (!room.gpPerson) return false;
+  // 去掉首尾空格后全匹配
+  return name.trim() === room.gpPerson.name;
+}
+
+/** 记录一次错误猜测，同时更新冷却时间 */
+export function gpAddWrongGuess(room: Room, role: RoomRole, name: string): void {
+  if (!room.gpWrongGuesses) room.gpWrongGuesses = [];
+  room.gpWrongGuesses.push({ role, name });
+  if (!room.gpLastWrongTime) room.gpLastWrongTime = { host: 0, guest: 0 };
+  room.gpLastWrongTime[role] = Date.now();
+}
+
+/** 检查该玩家是否仍在猜错冷却中，返回剩余毫秒 (0 = 可猜) */
+export function gpCooldownRemaining(room: Room, role: RoomRole): number {
+  if (!room.gpLastWrongTime) return 0;
+  const last = room.gpLastWrongTime[role];
+  if (!last) return 0;
+  const elapsed = Date.now() - last;
+  return Math.max(0, GP_WRONG_COOLDOWN_MS - elapsed);
 }

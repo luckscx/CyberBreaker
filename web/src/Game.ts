@@ -14,9 +14,10 @@ import { CampaignScene } from "@/scenes/CampaignScene";
 import { LeaderboardScene } from "@/scenes/LeaderboardScene";
 import { RoomWaitScene } from "@/scenes/RoomWaitScene";
 import { RoomPlayScene } from "@/scenes/RoomPlayScene";
+import { RoomGuessPersonScene } from "@/scenes/RoomGuessPersonScene";
 import { RoomClient } from "@/room/client";
 import type { GameMode } from "@/types";
-import type { RoomRole } from "@/room/client";
+import type { RoomRole, RoomMsg, GpCandidateQuestion } from "@/room/client";
 import { getUserUUID } from "@/utils/uuid";
 
 export class Game {
@@ -139,8 +140,9 @@ export class Game {
       return card;
     };
 
-    scene.addChild(makeCard(startY, "标准对战", "4 位不重复数字\n反馈：几个数字位置正确(A)、几个数字对但位置错(B)", "standard"));
-    scene.addChild(makeCard(startY + cardH + cardGap, "位置赛", "4 位数字可重复\n仅反馈：几个位置完全正确", "position_only"));
+    scene.addChild(makeCard(startY, "标准对战", "4 位不重复数字\n反馈：\n几个数字位置正确(A)\n几个数字对但位置错(B)", "standard"));
+    scene.addChild(makeCard(startY + cardH + cardGap, "位置赛", "4 位数字可重复\n仅反馈：几个位置完全正确(A)", "position_only"));
+    scene.addChild(makeCard(startY + (cardH + cardGap) * 2, "猜人名", "系统随机选一位名人\n双方轮流选题获取线索\n抢先猜出人名即获胜！", "guess_person"));
 
     this.app.stage.addChild(scene);
   }
@@ -224,14 +226,47 @@ export class Game {
     this.roomClient.connect(roomId, role).then(
       () => {
         this.app.stage.removeChildren();
+
+        // 监听 gp_game_start 消息（猜人名模式跳过等待场景直接开始）
+        let gpUnsub: (() => void) | null = null;
+        gpUnsub = this.roomClient!.onMessage((msg: RoomMsg) => {
+          if (msg.type === "gp_game_start") {
+            gpUnsub?.();
+            this.startGuessPersonPlay(
+              role,
+              msg.turn ?? "host",
+              msg.turnStartAt ?? Date.now(),
+              msg.totalQuestions ?? 20,
+              msg.candidateQuestions ?? [],
+            );
+          }
+          // 重连到进行中的猜人名游戏
+          if (msg.type === "room_joined" && msg.isReconnect && msg.rule === "guess_person" && msg.state === "playing") {
+            gpUnsub?.();
+            setTimeout(() => {
+              this.startGuessPersonPlay(
+                role,
+                msg.turn ?? "host",
+                msg.turnStartAt ?? Date.now(),
+                msg.gpTotalQuestions ?? 20,
+                msg.gpCandidateQuestions ?? [],
+                msg.gpQAHistory,
+                msg.gpWrongGuesses,
+                msg.gpAskedCount,
+                msg.gpAllAsked,
+              );
+            }, 500);
+          }
+        });
+
         const scene = new RoomWaitScene({
           app: this.app,
           client: this.roomClient!,
           roomId,
           role,
           joinUrl: shareUrl,
-          onGameStart: (turn, turnStartAt, rule, history) => this.startRoomPlay(role, turn, turnStartAt, rule, history),
-          onBack: () => this.leaveRoom(),
+          onGameStart: (turn, turnStartAt, rule, myCode, history) => this.startRoomPlay(role, turn, turnStartAt, rule, myCode, history),
+          onBack: () => { gpUnsub?.(); this.leaveRoom(); },
         });
         this.app.stage.addChild(scene);
       },
@@ -258,6 +293,7 @@ export class Game {
     initialTurn: RoomRole,
     turnStartAt: number,
     rule: import("@/room/client").RoomRule,
+    myCode: string,
     history?: { role: RoomRole; guess: string; result: string; timestamp: number }[]
   ): void {
     if (!this.roomClient) return;
@@ -269,9 +305,41 @@ export class Game {
       initialTurn,
       turnStartAt,
       rule,
+      myCode,
       joinUrl: this.currentJoinUrl,
       onBack: () => this.leaveRoom(),
       history,
+    });
+    this.app.stage.addChild(scene);
+  }
+
+  private startGuessPersonPlay(
+    myRole: RoomRole,
+    initialTurn: RoomRole,
+    turnStartAt: number,
+    totalQuestions: number,
+    candidateQuestions: GpCandidateQuestion[],
+    gpQAHistory?: { question: string; answer: string; askedBy: RoomRole }[],
+    gpWrongGuesses?: { role: RoomRole; name: string }[],
+    gpAskedCount?: number,
+    gpAllAsked?: boolean,
+  ): void {
+    if (!this.roomClient) return;
+    this.app.stage.removeChildren();
+    const scene = new RoomGuessPersonScene({
+      app: this.app,
+      client: this.roomClient,
+      myRole,
+      initialTurn,
+      turnStartAt,
+      totalQuestions,
+      candidateQuestions,
+      joinUrl: this.currentJoinUrl,
+      onBack: () => this.leaveRoom(),
+      gpQAHistory,
+      gpWrongGuesses,
+      gpAskedCount,
+      gpAllAsked,
     });
     this.app.stage.addChild(scene);
   }

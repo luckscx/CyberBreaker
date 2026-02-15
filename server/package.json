@@ -6,7 +6,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "seed": "tsx src/scripts/seedGhost.ts"
+    "seed": "tsx src/scripts/seedGhost.ts",
+    "test:llm": "tsx src/scripts/testLLM.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

@@ -28,7 +28,7 @@ export function isValidGuess(guess: string): boolean {
 }
 
 /** 按规则校验：standard=4位不重复，position_only=4位数字可重复 */
-export function isValidGuessForRule(guess: string, rule: "standard" | "position_only"): boolean {
+export function isValidGuessForRule(guess: string, rule: string): boolean {
   if (guess.length !== 4 || !/^\d{4}$/.test(guess)) return false;
   if (rule === "position_only") return true;
   return new Set(guess.split("")).size === 4;

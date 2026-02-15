@@ -24,7 +24,7 @@ export interface RoomWaitSceneOptions {
   roomId: string;
   role: RoomRole;
   joinUrl?: string;
-  onGameStart: (turn: RoomRole, turnStartAt: number, rule: RoomRule, history?: { role: RoomRole; guess: string; result: string; timestamp: number }[]) => void;
+  onGameStart: (turn: RoomRole, turnStartAt: number, rule: RoomRule, myCode: string, history?: { role: RoomRole; guess: string; result: string; timestamp: number }[]) => void;
   onBack: () => void;
 }
 
@@ -51,6 +51,7 @@ export class RoomWaitScene extends Container {
   private app: Application;
   private rule: RoomRule = "standard";
   private ruleLabel: Text | null = null;
+  private myCode = ""; // 保存自己设置的密码
 
   constructor(private opts: RoomWaitSceneOptions) {
     super();
@@ -185,26 +186,26 @@ export class RoomWaitScene extends Container {
 
     const actionY = 90 + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 12;
     const backspaceBtn = new Button({
-      label: "退格",
-      width: 80,
+      label: "⌫ 退格",
+      width: 90,
       fontSize: 14,
       onClick: () => {
         this._backspace();
       },
     });
-    backspaceBtn.x = cx - 70;
+    backspaceBtn.x = cx - 65;
     backspaceBtn.y = actionY;
     this.codeContainer.addChild(backspaceBtn);
 
     const confirmBtn = new Button({
-      label: "确认密码",
-      width: 120,
+      label: "✓ 确认",
+      width: 90,
       fontSize: 14,
       onClick: () => {
         this._submitCode();
       },
     });
-    confirmBtn.x = cx + 50;
+    confirmBtn.x = cx + 65;
     confirmBtn.y = actionY;
     this.codeContainer.addChild(confirmBtn);
 
@@ -282,10 +283,13 @@ export class RoomWaitScene extends Container {
 
   private _updateRuleLabel(): void {
     if (!this.ruleLabel) return;
-    this.ruleLabel.text =
-      this.rule === "position_only"
-        ? "规则：位置赛（数字可重复，只显示对位数）"
-        : "规则：标准（4位不重复 1A2B）";
+    if (this.rule === "guess_person") {
+      this.ruleLabel.text = "规则：猜人名（轮流选题，抢先猜对）";
+    } else if (this.rule === "position_only") {
+      this.ruleLabel.text = "规则：位置赛（数字可重复，只显示对位数）";
+    } else {
+      this.ruleLabel.text = "规则：标准（4位不重复 1A2B）";
+    }
   }
 
   private _onMsg(msg: {
@@ -310,13 +314,17 @@ export class RoomWaitScene extends Container {
         this._applyCodeState(msg.hostCodeSet, msg.guestCodeSet);
       }
       // 处理重连：如果是重连且游戏已开始，直接进入游戏场景
-      if (msg.isReconnect && msg.state === "playing" && msg.turn !== undefined) {
+      // guess_person 模式的重连由 Game.ts 处理
+      if (msg.isReconnect && msg.state === "playing" && msg.turn !== undefined && this.rule !== "guess_person") {
         console.log("[RoomWaitScene] reconnecting to playing game");
         this.statusText.text = "正在重连游戏...";
         this.statusText.style.fill = 0x00ffcc;
         setTimeout(() => {
-          this.opts.onGameStart(msg.turn!, msg.turnStartAt ?? Date.now(), msg.rule ?? this.rule, msg.history);
+          this.opts.onGameStart(msg.turn!, msg.turnStartAt ?? Date.now(), msg.rule ?? this.rule, this.myCode, msg.history);
         }, 500); // 短暂延迟，让用户看到重连提示
+      } else if (msg.isReconnect && this.rule === "guess_person") {
+        this.statusText.text = "正在重连...";
+        this.statusText.style.fill = 0x00ffcc;
       } else if (msg.isReconnect) {
         // 重连到等待阶段
         this.statusText.text = "已重连，等待对方加入...";
@@ -324,15 +332,27 @@ export class RoomWaitScene extends Container {
       }
     }
     if (msg.type === "peer_joined") {
-      this.statusText.style.fill = 0xaaaaaa;
-      this.statusText.text = "对方已加入！请设置你的 4 位密码";
-      this.codeContainer.visible = true;
       if (this.shareBar && this.role === "host") this.shareBar.visible = false;
+      if (this.rule === "guess_person") {
+        // 猜人名模式：不需要设置密码，等待服务器 gp_game_start
+        this.statusText.style.fill = 0x00ffcc;
+        this.statusText.text = "对方已加入，即将开始...";
+      } else {
+        this.statusText.style.fill = 0xaaaaaa;
+        this.statusText.text = "对方已加入！请设置你的 4 位密码";
+        this.codeContainer.visible = true;
+      }
+    }
+    if (msg.type === "gp_generating") {
+      this.statusText.style.fill = 0x00ffcc;
+      this.statusText.text = "🤖 AI 正在出题，请稍候...";
     }
     if (msg.type === "game_start" && msg.message) {
-      this.statusText.style.fill = 0xaaaaaa;
-      this.statusText.text = "请设置你的 4 位密码（对方要猜的数字）";
-      this.codeContainer.visible = true;
+      if (this.rule !== "guess_person") {
+        this.statusText.style.fill = 0xaaaaaa;
+        this.statusText.text = "请设置你的 4 位密码（对方要猜的数字）";
+        this.codeContainer.visible = true;
+      }
     }
     if (msg.type === "code_state") {
       if (msg.hostCodeSet !== undefined && msg.guestCodeSet !== undefined) {
@@ -345,7 +365,7 @@ export class RoomWaitScene extends Container {
       this.codeContainer.visible = false;
     }
     if (msg.type === "game_start" && msg.turn !== undefined) {
-      this.opts.onGameStart(msg.turn, msg.turnStartAt ?? Date.now(), msg.rule ?? this.rule, msg.history);
+      this.opts.onGameStart(msg.turn, msg.turnStartAt ?? Date.now(), msg.rule ?? this.rule, this.myCode, msg.history);
     }
     if (msg.type === "error") {
       this.statusText.text = msg.error ?? "错误";
@@ -522,6 +542,7 @@ export class RoomWaitScene extends Container {
       return;
     }
     this.statusText.style.fill = 0xaaaaaa;
+    this.myCode = this.codeValue; // 保存密码
     this.client.setCode(this.codeValue);
   }
 }

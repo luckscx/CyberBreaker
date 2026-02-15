@@ -5,7 +5,8 @@ import { ok, err } from '../types.js';
 export const roomRouter = Router();
 
 roomRouter.post('/create', (req, res) => {
-  const rule = req.body?.rule === 'position_only' ? 'position_only' : 'standard';
+  const ruleInput = req.body?.rule;
+  const rule = ruleInput === 'position_only' ? 'position_only' : ruleInput === 'guess_person' ? 'guess_person' : 'standard';
   const { roomId, room } = createRoom(rule);
   const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
   const joinUrl = `${baseUrl.replace(/\/$/, '')}/play?room=${roomId}`;

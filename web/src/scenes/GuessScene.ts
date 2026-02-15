@@ -155,7 +155,7 @@ export class GuessScene extends Container {
     // 操作按钮区域 - 退格和确认
     const actionY = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 15;
     const backspace = new Button({
-      label: "← 退格",
+      label: "⌫ 退格",
       width: 110,
       onClick: () => {
         this._backspace();

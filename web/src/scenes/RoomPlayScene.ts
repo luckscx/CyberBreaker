@@ -32,6 +32,7 @@ export interface RoomPlaySceneOptions {
   initialTurn: RoomRole;
   turnStartAt: number;
   rule: RoomRule;
+  myCode: string; // 自己设置的密码
   joinUrl?: string;
   onBack: () => void;
   /** 重连时的历史记录 */
@@ -76,7 +77,7 @@ export class RoomPlayScene extends Container {
 
   constructor(opts: RoomPlaySceneOptions) {
     super();
-    const { app, client, myRole, initialTurn, turnStartAt, rule, joinUrl, onBack, history } = opts;
+    const { app, client, myRole, initialTurn, turnStartAt, rule, myCode, joinUrl, onBack, history } = opts;
     this.app = app;
     this.client = client;
     this.myRole = myRole;
@@ -178,29 +179,29 @@ export class RoomPlayScene extends Container {
       this.digitButtons.push(btn);
     });
 
-    const confirmBtn = new Button({
-      label: "确认",
-      width: 85,
-      fontSize: 14,
-      onClick: () => {
-        this._submitGuess();
-      },
-    });
-    confirmBtn.x = cx - 48;
-    confirmBtn.y = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 10;
-    this.addChild(confirmBtn);
-
     const backspaceBtn = new Button({
-      label: "退格",
-      width: 85,
+      label: "⌫ 退格",
+      width: 90,
       fontSize: 14,
       onClick: () => {
         this._backspace();
       },
     });
-    backspaceBtn.x = cx + 48;
+    backspaceBtn.x = cx - 50;
     backspaceBtn.y = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 10;
     this.addChild(backspaceBtn);
+
+    const confirmBtn = new Button({
+      label: "✓ 确认",
+      width: 90,
+      fontSize: 14,
+      onClick: () => {
+        this._submitGuess();
+      },
+    });
+    confirmBtn.x = cx + 50;
+    confirmBtn.y = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 10;
+    this.addChild(confirmBtn);
 
     this.resultText = new Text({
       text: "",
@@ -223,6 +224,16 @@ export class RoomPlayScene extends Container {
     this.myHistoryText.x = colGap;
     this.myHistoryText.y = historyY;
     this.addChild(this.myHistoryText);
+    // 显示我的密码
+    const myCodeLabel = new Text({
+      text: `我的密码：${myCode}`,
+      style: { fontFamily: "system-ui", fontSize: 12, fill: 0x00ffcc, fontWeight: "bold" },
+    });
+    myCodeLabel.anchor.set(0, 0);
+    myCodeLabel.x = w / 2 + colGap;
+    myCodeLabel.y = historyY;
+    this.addChild(myCodeLabel);
+
     this.peerHistoryText = new Text({
       text: this.peerHistory.length > 0
         ? "对方猜测：\n" + this.peerHistory.join("\n")
@@ -231,7 +242,7 @@ export class RoomPlayScene extends Container {
     });
     this.peerHistoryText.anchor.set(0, 0);
     this.peerHistoryText.x = w / 2 + colGap;
-    this.peerHistoryText.y = historyY;
+    this.peerHistoryText.y = historyY + 18;
     this.addChild(this.peerHistoryText);
 
     // 道具按钮 & 说明：放在页面最底部
