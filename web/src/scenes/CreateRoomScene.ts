@@ -17,6 +17,7 @@ export class CreateRoomScene extends Container {
   ) {
     super();
     const w = app.screen.width;
+    const h = app.screen.height;
     const cx = w / 2;
 
     const back = new Button({
@@ -40,13 +41,26 @@ export class CreateRoomScene extends Container {
     title.y = 100;
     this.addChild(title);
 
+    const enterBtn = new Button({
+      label: "进入房间",
+      width: 140,
+      onClick: () => {
+        playClick();
+        opts.onEnter();
+      },
+    });
+    enterBtn.x = cx - 70;
+    enterBtn.y = 220;
+    this.addChild(enterBtn);
+
+    const bottomY = h - 120;
     const hint = new Text({
       text: "分享链接邀请对方加入",
       style: { fontFamily: "system-ui", fontSize: 14, fill: 0x888888 },
     });
     hint.anchor.set(0.5);
     hint.x = cx;
-    hint.y = 140;
+    hint.y = bottomY;
     this.addChild(hint);
 
     const linkText = new Text({
@@ -55,7 +69,7 @@ export class CreateRoomScene extends Container {
     });
     linkText.anchor.set(0.5, 0);
     linkText.x = cx;
-    linkText.y = 175;
+    linkText.y = bottomY + 28;
     this.addChild(linkText);
 
     let copyStatusText = "复制链接";
@@ -76,20 +90,8 @@ export class CreateRoomScene extends Container {
         );
       },
     });
-    copyBtn.x = cx - 75;
-    copyBtn.y = 260;
+    copyBtn.x = cx - 70;
+    copyBtn.y = bottomY + 75;
     this.addChild(copyBtn);
-
-    const enterBtn = new Button({
-      label: "进入房间",
-      width: 140,
-      onClick: () => {
-        playClick();
-        opts.onEnter();
-      },
-    });
-    enterBtn.x = cx + 75;
-    enterBtn.y = 260;
-    this.addChild(enterBtn);
   }
 }

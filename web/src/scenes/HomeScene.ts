@@ -1,6 +1,7 @@
 import type { Application } from "pixi.js";
 import { Assets, Container, Sprite, Text } from "pixi.js";
 import { Button } from "@/components/Button";
+import { isBgmPaused, toggleBgmPaused } from "@/audio/bgm";
 import type { GameMode } from "@/types";
 
 const TITLE_Y = 0.28;
@@ -12,6 +13,8 @@ export interface HomeSceneOptions {
 }
 
 export class HomeScene extends Container {
+  private musicBtn: Button | null = null;
+
   constructor(
     private app: Application,
     private opts: HomeSceneOptions
@@ -20,6 +23,27 @@ export class HomeScene extends Container {
     this._loadCoverBg();
     this.addChild(this._buildTitle());
     this._addButtons();
+    this._addMusicButton();
+  }
+
+  private _musicLabel(): string {
+    return isBgmPaused() ? "音乐关" : "音乐开";
+  }
+
+  private _addMusicButton(): void {
+    const margin = 16;
+    this.musicBtn = new Button({
+      label: this._musicLabel(),
+      width: 72,
+      fontSize: 14,
+      onClick: () => {
+        toggleBgmPaused();
+        this.musicBtn?.setLabel(this._musicLabel());
+      },
+    });
+    this.musicBtn.x = this.app.screen.width - margin - this.musicBtn.width / 2;
+    this.musicBtn.y = margin + this.musicBtn.height / 2;
+    this.addChild(this.musicBtn);
   }
 
   private _loadCoverBg(): void {

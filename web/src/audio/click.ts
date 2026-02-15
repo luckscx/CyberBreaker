@@ -1,14 +1,4 @@
-let ctx: AudioContext | null = null;
-
-function getContext(): AudioContext | null {
-  if (ctx) return ctx;
-  const Ctor =
-    window.AudioContext ??
-    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctor) return null;
-  ctx = new Ctor();
-  return ctx;
-}
+import { getContext } from "@/audio/context";
 
 /** 短促按键音（Web Audio 生成，无外部资源） */
 export function playClick(): void {

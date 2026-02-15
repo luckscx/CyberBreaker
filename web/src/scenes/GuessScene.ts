@@ -2,6 +2,7 @@ import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
 import { Button } from "@/components/Button";
 import { playClick } from "@/audio/click";
+import { isBgmPaused, toggleBgmPaused } from "@/audio/bgm";
 import { evaluate, generateSecret, isValidGuess } from "@/logic/guess";
 
 const SLOT_SIZE = 52;
@@ -58,6 +59,21 @@ export class GuessScene extends Container {
     back.y = 50;
     back.on("pointerdown", () => playClick());
     this.addChild(back);
+
+    const margin = 16;
+    const musicBtn = new Button({
+      label: isBgmPaused() ? "音乐关" : "音乐开",
+      width: 72,
+      fontSize: 14,
+      onClick: () => {
+        playClick();
+        toggleBgmPaused();
+        musicBtn.setLabel(isBgmPaused() ? "音乐关" : "音乐开");
+      },
+    });
+    musicBtn.x = w - margin - musicBtn.width / 2;
+    musicBtn.y = margin + musicBtn.height / 2;
+    this.addChild(musicBtn);
 
     const title = new Text({
       text: "猜数字",

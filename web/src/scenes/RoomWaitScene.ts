@@ -46,7 +46,7 @@ export class RoomWaitScene extends Container {
 
   constructor(private opts: RoomWaitSceneOptions) {
     super();
-    const { app, client, roomId, role, joinUrl, onBack } = opts;
+    const { app, client, role, joinUrl, onBack } = opts;
     this.client = client;
     this.role = role;
     const w = app.screen.width;
@@ -219,22 +219,40 @@ export class RoomWaitScene extends Container {
 
   private _buildShareBar(app: import("pixi.js").Application, joinUrl: string): Container {
     const w = app.screen.width;
+    const h = app.screen.height;
+    const cx = w / 2;
     const bar = new Container();
-    bar.y = 0;
+    bar.x = cx;
+    bar.y = h / 2 - 50;
+
+    const boxW = Math.min(w - 80, 320);
+    const padding = 20;
     const bg = new Graphics();
-    bg.roundRect(0, 0, w, 42, 0).fill({ color: 0x0d1520, alpha: 0.95 });
+    bg.roundRect(-boxW / 2, 0, boxW, 140, 12).fill({ color: 0x0d1520, alpha: 0.95 });
+    bg.roundRect(-boxW / 2, 0, boxW, 140, 12).stroke({ width: 1, color: 0x334455 });
     bar.addChild(bg);
+
     const hint = new Text({
       text: "邀请链接（人数未满可分享）",
-      style: { fontFamily: "system-ui", fontSize: 12, fill: 0x888888 },
+      style: { fontFamily: "system-ui", fontSize: 14, fill: 0x888888 },
     });
-    hint.anchor.set(0, 0.5);
-    hint.x = 16;
-    hint.y = 21;
+    hint.anchor.set(0.5);
+    hint.x = 0;
+    hint.y = 28;
     bar.addChild(hint);
+
+    const linkText = new Text({
+      text: joinUrl,
+      style: { fontFamily: "system-ui", fontSize: 11, fill: 0xaaaaaa, wordWrap: true, wordWrapWidth: boxW - padding * 2 },
+    });
+    linkText.anchor.set(0.5, 0);
+    linkText.x = 0;
+    linkText.y = 52;
+    bar.addChild(linkText);
+
     const copyBtn = new Button({
       label: "复制链接",
-      width: 88,
+      width: 120,
       fontSize: 14,
       onClick: () => {
         playClick();
@@ -250,8 +268,8 @@ export class RoomWaitScene extends Container {
         );
       },
     });
-    copyBtn.x = w - copyBtn.width - 16;
-    copyBtn.y = 6;
+    copyBtn.x = -copyBtn.width / 2;
+    copyBtn.y = 95;
     bar.addChild(copyBtn);
     return bar;
   }

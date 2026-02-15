@@ -2,6 +2,7 @@ import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
 import { Button } from "@/components/Button";
 import { playClick } from "@/audio/click";
+import { isBgmPaused, toggleBgmPaused } from "@/audio/bgm";
 import { RoomClient, type RoomRole } from "@/room/client";
 import { isValidGuess } from "@/logic/guess";
 
@@ -79,6 +80,21 @@ export class RoomPlayScene extends Container {
     back.x = 60;
     back.y = 50;
     this.addChild(back);
+
+    const margin = 16;
+    const musicBtn = new Button({
+      label: isBgmPaused() ? "音乐关" : "音乐开",
+      width: 72,
+      fontSize: 14,
+      onClick: () => {
+        playClick();
+        toggleBgmPaused();
+        musicBtn.setLabel(isBgmPaused() ? "音乐关" : "音乐开");
+      },
+    });
+    musicBtn.x = w - margin - musicBtn.width / 2;
+    musicBtn.y = margin + musicBtn.height / 2;
+    this.addChild(musicBtn);
 
     this.turnText = new Text({
       text: this.turn === myRole ? "你的回合" : "对方回合",

@@ -47,6 +47,28 @@ cd web && pnpm install && pnpm run dev
 
 首页选「单机模式」无需服务端；选「创建房间」需服务端已启动。另一人通过 `?room=房间ID` 链接加入房间。
 
+## 🚀 生产部署
+
+项目已部署到生产环境：**http://nu.grissom.cn**
+
+### 一键部署脚本
+
+```bash
+# 完整部署（安装依赖 + 构建 + 重启）
+./deploy.sh
+
+# 快速部署（仅同步代码 + 重启）
+./deploy-quick.sh
+```
+
+详细说明请查看 [DEPLOY_GUIDE.md](./DEPLOY_GUIDE.md)
+
+## 📚 文档
+
+- [CLAUDE.md](./CLAUDE.md) - 项目架构和开发指南
+- [DEPLOYMENT.md](./DEPLOYMENT.md) - 部署运维文档
+- [DEPLOY_GUIDE.md](./DEPLOY_GUIDE.md) - 部署脚本使用说明
+
 ## 房间 API 摘要
 
 - `POST /api/v1/room/create`：创建房间，返回 `roomId`、`joinUrl`、`wsPath`

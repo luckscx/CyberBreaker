@@ -2,6 +2,7 @@ import type { Application } from "pixi.js";
 import { Text } from "pixi.js";
 import { Button } from "@/components/Button";
 import { createRoom } from "@/api/room";
+import { startBgm } from "@/audio/bgm";
 import { HomeScene } from "@/scenes/HomeScene";
 import { GuessScene } from "@/scenes/GuessScene";
 import { RoomWaitScene } from "@/scenes/RoomWaitScene";
@@ -17,6 +18,7 @@ export class Game {
   constructor(private app: Application) {}
 
   start(): void {
+    startBgm();
     const params = new URLSearchParams(window.location.search);
     const roomId = params.get("room");
     if (roomId) {
