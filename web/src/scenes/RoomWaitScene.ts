@@ -139,7 +139,7 @@ export class RoomWaitScene extends Container {
 
     this.codeContainer = new Container();
     this.codeContainer.visible = false;
-    this.codeContainer.y = 185;
+    this.codeContainer.y = 165;
 
     const hint = new Text({
       text: "设置你的 4 位密码（对方要猜的数字）",
@@ -156,12 +156,12 @@ export class RoomWaitScene extends Container {
     });
     this.ruleLabel.anchor.set(0.5);
     this.ruleLabel.x = cx;
-    this.ruleLabel.y = 18;
+    this.ruleLabel.y = 22;
     this.codeContainer.addChild(this.ruleLabel);
 
     this.codeSlots = this._buildCodeSlots();
     this.codeSlots.x = cx - (4 * SLOT_SIZE + 3 * SLOT_GAP) / 2 + SLOT_SIZE / 2 + SLOT_GAP / 2;
-    this.codeSlots.y = 38;
+    this.codeSlots.y = 52;
     this.codeContainer.addChild(this.codeSlots);
 
     const keypadW = KEYPAD_COLS * KEY_SIZE + (KEYPAD_COLS - 1) * KEY_GAP;

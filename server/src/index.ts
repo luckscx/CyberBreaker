@@ -8,6 +8,7 @@ import { connectDb } from './db.js';
 import { healthRouter } from './routes/health.js';
 import { apiRouter } from './routes/index.js';
 import { handleRoomWs } from './room/wsHandler.js';
+import { handleFreeRoomWs } from './freeRoom/wsHandler.js';
 
 const app = express();
 app.use(morgan('combined'));
@@ -19,25 +20,38 @@ app.use('/api/v1', apiRouter);
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
+const freeWss = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', (req, socket, head) => {
   const url = req.url || '';
-  if (!url.startsWith('/ws/room/')) {
-    console.log('[WS] upgrade rejected: path not /ws/room/', url);
-    socket.destroy();
-    return;
-  }
   const [path, search] = url.split('?');
   const searchParams = new URLSearchParams(search || '');
-  console.log('[WS] upgrade ok path=%s role=%s', path, searchParams.get('role'));
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req, path, searchParams);
-  });
+
+  if (url.startsWith('/ws/room/')) {
+    console.log('[WS] upgrade ok path=%s role=%s', path, searchParams.get('role'));
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit('connection', ws, req, path, searchParams);
+    });
+  } else if (url.startsWith('/ws/free/')) {
+    console.log('[WS-Free] upgrade ok path=%s', path);
+    freeWss.handleUpgrade(req, socket, head, (ws) => {
+      freeWss.emit('connection', ws, req, path, searchParams);
+    });
+  } else {
+    console.log('[WS] upgrade rejected: unknown path', url);
+    socket.destroy();
+  }
 });
 
 wss.on('connection', (ws: import('ws').WebSocket, _req: http.IncomingMessage, path: string, searchParams: URLSearchParams) => {
   console.log('[WS] connection path=%s role=%s', path, searchParams.get('role'));
   handleRoomWs(ws, path, searchParams);
+});
+
+freeWss.on('connection', (ws: import('ws').WebSocket, _req: http.IncomingMessage, path: string, searchParams: URLSearchParams) => {
+  const roomCode = path.replace('/ws/free/', '');
+  console.log('[WS-Free] connection roomCode=%s', roomCode);
+  handleFreeRoomWs(ws, roomCode, searchParams);
 });
 
 const PORT = Number(process.env.PORT) || 3000;

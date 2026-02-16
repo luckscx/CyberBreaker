@@ -1,8 +1,8 @@
 import { Container, Graphics, Rectangle, Text } from "pixi.js";
 import { playClick } from "@/audio/click";
 
-const DEPTH = 6; // 3D 深度
-const RADIUS = 8;
+const DEPTH = 4; // 3D 深度
+const RADIUS = 6;
 
 export interface KeyButtonOptions {
   label: string;

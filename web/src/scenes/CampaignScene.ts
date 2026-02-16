@@ -1,6 +1,6 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { Button } from "../components/Button";
-import { KeyButton } from "../components/KeyButton";
+import { GuessInput } from "../components/GuessInput";
 import { PowerUpButton } from "../components/PowerUpButton";
 import { Background } from "../components/Background";
 import { MusicToggle } from "../components/MusicToggle";
@@ -27,6 +27,7 @@ export class CampaignScene extends Container {
 
   // UI Elements
   private slotsContainer: Container;
+  private guessInput: GuessInput | null = null;
   private historyText: Text;
   private resultText: Text;
   private timerText: Text | null = null;
@@ -208,13 +209,34 @@ export class CampaignScene extends Container {
     this.slotsContainer.position.set(centerX - totalSlotsWidth / 2, 160);
     this.addChild(this.slotsContainer);
 
-    // 键盘（居中）- 调整Y位置避免重叠
-    const keypadY = 160 + slotHeight + 15; // 插槽底部 + 间距
-    this._buildKeypad(centerX, keypadY);
+    // GuessInput 键盘（仅键盘，槽由上方 slotsContainer 负责）
+    const keypadY = 160 + slotHeight + 12;
+    this.guessInput = new GuessInput({
+      showSlots: false,
+      slotSize: 60,
+      slotGap: gap,
+      keySize: 70,
+      keyGap: 10,
+      keyFontSize: 24,
+      actionFontSize: 13,
+      allowRepeat: false,
+      confirmLabel: "✓",
+      backspaceLabel: "⌫",
+      eliminatedDigits: this.gameState.powerUpEffects.eliminatedDigits || [],
+      onGuessChange: (guess) => {
+        this.gameState.currentGuess = guess;
+        this._buildSlots();
+      },
+      onSubmit: (guess) => this._handleConfirm(guess),
+    });
+    this.guessInput.setGuess(this.gameState.currentGuess);
+    this.guessInput.x = centerX;
+    this.guessInput.y = keypadY;
+    this.addChild(this.guessInput);
+    if (this.gameState.gameEnded) this.guessInput.setEnabled(false);
 
     // 结果文本（居中）- 键盘下方
-    const keypadHeight = 4 * 75; // 4行，每行高度75px
-    const resultY = keypadY + keypadHeight + 15;
+    const resultY = keypadY + this.guessInput.totalHeight + 10;
     this.resultText.style = {
       fontFamily: "Arial",
       fontSize: 22,
@@ -284,80 +306,6 @@ export class CampaignScene extends Container {
     }
   }
 
-  private _buildKeypad(centerX: number, startY: number): void {
-    const layout = [
-      ["1", "2", "3"],
-      ["4", "5", "6"],
-      ["7", "8", "9"],
-      ["⌫", "0", "✓"],
-    ];
-
-    const buttonWidth = 70;
-    const buttonHeight = 65;
-    const gapX = 80; // 按钮宽度 + 间距
-    const gapY = 75; // 按钮高度 + 间距
-
-    // 计算键盘总宽度并居中
-    const totalWidth = 3 * buttonWidth + 2 * 10; // 3个按钮 + 2个间距
-    const startX = centerX - totalWidth / 2;
-
-    const eliminatedDigits = this.gameState.powerUpEffects.eliminatedDigits || [];
-
-    layout.forEach((row, rowIdx) => {
-      row.forEach((key, colIdx) => {
-        if (key === "⌫") {
-          // 退格按钮 - 使用普通 Button
-          const btn = new Button({
-            label: key,
-            width: buttonWidth,
-            height: buttonHeight,
-            onClick: () => this._handleBackspace(),
-          });
-          btn.position.set(startX + colIdx * gapX, startY + rowIdx * gapY);
-          this.addChild(btn);
-        } else if (key === "✓") {
-          // 确认按钮 - 使用普通 Button
-          const btn = new Button({
-            label: key,
-            width: buttonWidth,
-            height: buttonHeight,
-            onClick: () => this._handleConfirm(),
-          });
-          btn.position.set(startX + colIdx * gapX, startY + rowIdx * gapY);
-          this.addChild(btn);
-        } else {
-          // 数字键 - 使用 3D KeyButton
-          const isEliminated = eliminatedDigits.includes(key);
-          if (isEliminated) {
-            // 被排除的数字 - 显示禁用状态的 3D 按钮
-            const disabledBtn = new KeyButton({
-              label: key,
-              width: buttonWidth,
-              height: buttonHeight,
-              fontSize: 24,
-              onClick: () => {}, // 空操作
-            });
-            disabledBtn.alpha = 0.3; // 半透明表示禁用
-            disabledBtn.eventMode = "none"; // 禁用交互
-            disabledBtn.cursor = "not-allowed";
-            disabledBtn.position.set(startX + colIdx * gapX, startY + rowIdx * gapY);
-            this.addChild(disabledBtn);
-          } else {
-            const btn = new KeyButton({
-              label: key,
-              width: buttonWidth,
-              height: buttonHeight,
-              fontSize: 24,
-              onClick: () => this._handleDigit(key),
-            });
-            btn.position.set(startX + colIdx * gapX, startY + rowIdx * gapY);
-            this.addChild(btn);
-          }
-        }
-      });
-    });
-  }
-
   private _buildPowerUps(centerX: number, y: number): void {
     const availableTypes = this.levelConfig.availablePowerUps;
     const totalWidth = availableTypes.length * 70 + (availableTypes.length - 1) * 10;
@@ -379,35 +327,19 @@ export class CampaignScene extends Container {
     });
   }
 
-  private _handleDigit(digit: string): void {
+  private _handleConfirm(guess: string): void {
     if (this.gameState.gameEnded) return;
-    if (this.gameState.currentGuess.length >= 4) return;
-    if (this.gameState.currentGuess.includes(digit)) return;
-
-    playClick();
-    this.gameState.currentGuess += digit;
-    this._buildSlots();
-  }
-
-  private _handleBackspace(): void {
-    if (this.gameState.gameEnded) return;
-    playClick();
-    this.gameState.currentGuess = this.gameState.currentGuess.slice(0, -1);
-    this._buildSlots();
-  }
-
-  private _handleConfirm(): void {
-    if (this.gameState.gameEnded) return;
-    if (!isValidGuess(this.gameState.currentGuess)) {
+    if (!isValidGuess(guess)) {
       this.resultText.text = "请输入 4 位不重复数字";
       this.resultText.style.fill = 0xff6644;
       return;
     }
 
     playClick();
-    const { a, b } = evaluate(this.gameState.secret, this.gameState.currentGuess);
-    this.gameState.history.push({ guess: this.gameState.currentGuess, a, b });
+    const { a, b } = evaluate(this.gameState.secret, guess);
+    this.gameState.history.push({ guess, a, b });
     this.gameState.currentGuess = "";
+    this.guessInput?.clear();
 
     if (this.gameState.remainingGuesses !== null) {
       this.gameState.remainingGuesses--;
@@ -510,6 +442,7 @@ export class CampaignScene extends Container {
   private _handleVictory(): void {
     this.gameState.gameEnded = true;
     this.gameState.victory = true;
+    this.guessInput?.setEnabled(false);
     this._stopTimer();
 
     const elapsedMs = Date.now() - this.startTime;
@@ -532,6 +465,7 @@ export class CampaignScene extends Container {
   private _handleDefeat(): void {
     this.gameState.gameEnded = true;
     this.gameState.victory = false;
+    this.guessInput?.setEnabled(false);
     this._stopTimer();
     this._showResult(false, 0, false);
   }

@@ -1,11 +1,13 @@
 import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
 import { Button } from "@/components/Button";
-import { KeyButton } from "@/components/KeyButton";
+import { GuessInput } from "@/components/GuessInput";
 import { MusicToggle } from "@/components/MusicToggle";
 import { BackButton } from "@/components/BackButton";
+import { BackpackButton } from "@/components/BackpackButton";
+import { BackpackModal } from "@/components/BackpackModal";
 import { RoomClient, type RoomRole, type RoomRule } from "@/room/client";
-import { isValidGuessForRule } from "@/logic/guess";
+import { inventoryToItemData } from "@/data/pvpItems";
 
 interface Particle {
   g: Graphics;
@@ -15,14 +17,6 @@ interface Particle {
   maxLife: number;
 }
 
-const SLOT_SIZE = 50;
-const SLOT_GAP = 8;
-const KEY_SIZE = 64;
-const KEY_GAP = 8;
-const KEYPAD_COLS = 3;
-const KEYPAD_ROWS = 4;
-const KEYPAD_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
-const RADIUS = 8;
 const TURN_SEC = 60;
 
 export interface RoomPlaySceneOptions {
@@ -48,9 +42,7 @@ export class RoomPlayScene extends Container {
   private app: Application;
   private turnText: Text;
   private countdownText: Text;
-  private slotContainer: Container;
-  private currentGuess = "";
-  private digitButtons: KeyButton[] = [];
+  private guessInput: GuessInput;
   private myHistoryText: Text;
   private peerHistoryText: Text;
   private resultText: Text;
@@ -153,54 +145,16 @@ export class RoomPlayScene extends Container {
     secLabel.y = 80;
     this.addChild(secLabel);
 
-    this.slotContainer = this._buildSlots();
-    this.slotContainer.x = cx - (4 * SLOT_SIZE + 3 * SLOT_GAP) / 2 + SLOT_SIZE / 2 + SLOT_GAP / 2;
-    this.slotContainer.y = 115;
-    this.addChild(this.slotContainer);
-
-    const keypadY = 180;
-    const keypadW = KEYPAD_COLS * KEY_SIZE + (KEYPAD_COLS - 1) * KEY_GAP;
-    KEYPAD_DIGITS.forEach((digit, i) => {
-      const row = Math.floor(i / KEYPAD_COLS);
-      const col = i % KEYPAD_COLS;
-      const btn = new KeyButton({
-        label: String(digit),
-        width: KEY_SIZE,
-        height: KEY_SIZE,
-        fontSize: 22,
-        onClick: () => {
-          this._addDigit(digit);
-        },
-      });
-      btn.x = cx - keypadW / 2 + KEY_SIZE / 2 + col * (KEY_SIZE + KEY_GAP);
-      btn.y = keypadY + row * (KEY_SIZE + KEY_GAP);
-      this.addChild(btn);
-      this.digitButtons.push(btn);
+    this.guessInput = new GuessInput({
+      slotSize: 50,
+      keySize: 64,
+      keyGap: 8,
+      allowRepeat: rule === "position_only",
+      onSubmit: (guess) => this._submitGuess(guess),
     });
-
-    const backspaceBtn = new Button({
-      label: "⌫ 退格",
-      width: 90,
-      fontSize: 14,
-      onClick: () => {
-        this._backspace();
-      },
-    });
-    backspaceBtn.x = cx - 50;
-    backspaceBtn.y = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 10;
-    this.addChild(backspaceBtn);
-
-    const confirmBtn = new Button({
-      label: "✓ 确认",
-      width: 90,
-      fontSize: 14,
-      onClick: () => {
-        this._submitGuess();
-      },
-    });
-    confirmBtn.x = cx + 50;
-    confirmBtn.y = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 10;
-    this.addChild(confirmBtn);
+    this.guessInput.x = cx;
+    this.guessInput.y = 90;
+    this.addChild(this.guessInput);
 
     this.resultText = new Text({
       text: "",
@@ -208,10 +162,10 @@ export class RoomPlayScene extends Container {
     });
     this.resultText.anchor.set(0.5, 0);
     this.resultText.x = cx;
-    this.resultText.y = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 38;
+    this.resultText.y = 90 + this.guessInput.totalHeight + 6;
     this.addChild(this.resultText);
 
-    const historyY = keypadY + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 58;
+    const historyY = 90 + this.guessInput.totalHeight + 28;
     const colGap = 20;
     this.myHistoryText = new Text({
       text: this.myHistory.length > 0
@@ -277,7 +231,7 @@ export class RoomPlayScene extends Container {
     this.itemEffectText.y = h - 75;
     this.addChild(this.itemEffectText);
 
-    this._refreshSlots();
+    this.guessInput.setEnabled(this.turn === myRole);
     this._startCountdown();
     this.unsub = this.client.onMessage((msg) => this._onMsg(msg));
   }
@@ -410,7 +364,7 @@ export class RoomPlayScene extends Container {
         if (this.turn === this.myRole) {
           this.resultText.text = "时间到";
           this.resultText.style.fill = 0xff6644;
-          this._setInputEnabled(false);
+          this.guessInput.setEnabled(false);
           if (!this.timeoutReported) {
             this.timeoutReported = true;
             this.client.turnTimeout();
@@ -426,18 +380,17 @@ export class RoomPlayScene extends Container {
     this.timeoutReported = false;
     this.turn = nextTurn;
     this.turnStartAt = turnStartAt;
-    this.currentGuess = "";
-    this._refreshSlots();
+    this.guessInput.clear();
     this.turnText.text = this.turn === this.myRole ? "你的回合" : "对方回合";
     this.turnText.style.fill = this.turn === this.myRole ? 0x00ffcc : 0xffaa44;
     this.resultText.text = "";
-    this._setInputEnabled(this.turn === this.myRole);
+    this.guessInput.setEnabled(this.turn === this.myRole);
     this._startCountdown();
   }
 
   private _useItem(): void {
     if (this.myItemUsed || this.gameOver) return;
-    this.client.useItem();
+    this.client.useItem("reduce_opponent_time");
   }
 
   private _onItemUsed(byRole: RoomRole): void {
@@ -518,7 +471,7 @@ export class RoomPlayScene extends Container {
       this.turnText.text = won ? "你赢了！" : "你输了";
       this.turnText.style.fill = won ? 0x00ff88 : 0xff6644;
       this.resultText.text = won ? "恭喜获胜" : "对方先猜中";
-      this._setInputEnabled(false);
+      this.guessInput.setEnabled(false);
       this._showGameOverOverlay(won);
     }
     if (msg.type === "error") {
@@ -527,63 +480,8 @@ export class RoomPlayScene extends Container {
     }
   }
 
-  private _buildSlots(): Container {
-    const c = new Container();
-    for (let i = 0; i < 4; i++) {
-      const box = new Graphics();
-      box.roundRect(-SLOT_SIZE / 2, -SLOT_SIZE / 2, SLOT_SIZE, SLOT_SIZE, RADIUS).fill({ color: 0x1a2332 });
-      box.roundRect(-SLOT_SIZE / 2, -SLOT_SIZE / 2, SLOT_SIZE, SLOT_SIZE, RADIUS).stroke({ width: 1, color: 0x334455 });
-      box.x = i * (SLOT_SIZE + SLOT_GAP);
-      c.addChild(box);
-      const text = new Text({
-        text: "?",
-        style: { fontFamily: "system-ui", fontSize: 20, fill: 0x00ffcc },
-      });
-      text.anchor.set(0.5);
-      text.x = i * (SLOT_SIZE + SLOT_GAP);
-      text.name = `slot-${i}`;
-      c.addChild(text);
-    }
-    return c;
-  }
-
-  private _refreshSlots(): void {
-    const digits = this.currentGuess.split("");
-    for (let i = 0; i < 4; i++) {
-      const t = this.slotContainer.getChildByName(`slot-${i}`) as Text;
-      if (t) t.text = digits[i] ?? "?";
-    }
-    this.digitButtons.forEach((btn, i) => {
-      if (this.rule === "position_only") btn.visible = true;
-      else btn.visible = !this.currentGuess.includes(String(KEYPAD_DIGITS[i]));
-    });
-  }
-
-  private _setInputEnabled(enabled: boolean): void {
-    this.digitButtons.forEach((b) => { b.eventMode = enabled ? "static" : "none"; });
-    this.slotContainer.visible = enabled;
-  }
-
-  private _addDigit(d: number): void {
-    if (this.turn !== this.myRole) return;
-    if (this.currentGuess.length >= 4) return;
-    if (this.rule === "standard" && this.currentGuess.includes(String(d))) return;
-    this.currentGuess += d;
-    this.resultText.text = "";
-    this._refreshSlots();
-  }
-
-  private _backspace(): void {
-    if (this.turn !== this.myRole) return;
-    this.currentGuess = this.currentGuess.slice(0, -1);
-    this.resultText.text = "";
-    this._refreshSlots();
-  }
-
-  private _submitGuess(): void {
-    if (this.turn !== this.myRole || !isValidGuessForRule(this.currentGuess, this.rule)) return;
-    this.client.guess(this.currentGuess);
-    this.currentGuess = "";
-    this._refreshSlots();
+  private _submitGuess(guess: string): void {
+    if (this.turn !== this.myRole || this.gameOver) return;
+    this.client.guess(guess);
   }
 }

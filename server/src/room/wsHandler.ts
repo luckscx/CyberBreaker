@@ -21,6 +21,8 @@ import {
   type RoomRole,
   type RoomRule,
 } from './store.js';
+import { isValidItemId, PowerUpType } from '../config/items.js';
+import { applyItemEffect } from './itemEffects.js';
 
 const CODE_REG = /^[0-9]{4}$/;
 function isValidCode(s: string, rule: RoomRule): boolean {
@@ -114,8 +116,7 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
       rule: room.rule,
       hostCodeSet: !!room.hostCode,
       guestCodeSet: !!room.guestCode,
-      hostItemUsed: room.hostItemUsed,
-      guestItemUsed: room.guestItemUsed,
+      inventory: room.hostInventory,
       isReconnect,
       history: room.history,
       turn: room.turn,
@@ -140,8 +141,7 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
       rule: room.rule,
       hostCodeSet: !!room.hostCode,
       guestCodeSet: !!room.guestCode,
-      hostItemUsed: room.hostItemUsed,
-      guestItemUsed: room.guestItemUsed,
+      inventory: room.guestInventory,
       isReconnect,
       history: room.history,
       turn: room.turn,
@@ -177,7 +177,7 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
   ws.on('message', (raw) => {
     const room = getRoom(roomId);
     if (!room) return;
-    let data: { type?: string; code?: string; guess?: string; questionId?: number; name?: string };
+    let data: { type?: string; code?: string; guess?: string; questionId?: number; name?: string; itemId?: string };
     try {
       data = typeof raw === 'string' ? JSON.parse(raw) : JSON.parse(raw.toString());
     } catch {
@@ -249,15 +249,40 @@ export function handleRoomWs(ws: WebSocket, path: string, searchParams: URLSearc
           send(ws, 'error', { message: 'game not started' });
           return;
         }
-        const used = role === 'host' ? room.hostItemUsed : room.guestItemUsed;
-        if (used) {
-          send(ws, 'error', { message: 'item already used' });
+
+        const itemId = data.itemId;
+        if (!itemId || !isValidItemId(itemId)) {
+          send(ws, 'error', { message: 'invalid item id' });
           return;
         }
-        if (role === 'host') room.hostItemUsed = true;
-        else room.guestItemUsed = true;
-        console.log('[WS room] use_item roomId=%s role=%s', roomId, role);
-        broadcast(room, 'item_used', { role });
+
+        // Check inventory
+        const inventory = role === 'host' ? room.hostInventory : room.guestInventory;
+        const count = inventory[itemId] || 0;
+        if (count <= 0) {
+          send(ws, 'error', { message: 'item not in inventory' });
+          return;
+        }
+
+        // Consume item
+        inventory[itemId] = count - 1;
+
+        // Apply effect
+        const effectData = applyItemEffect(itemId as PowerUpType, room, role);
+        console.log('[WS room] use_item roomId=%s role=%s itemId=%s', roomId, role, itemId);
+
+        // Broadcast item usage to both players
+        broadcast(room, 'item_used', {
+          role,
+          itemId,
+          effectData,
+        });
+
+        // Sync inventory update
+        broadcast(room, 'inventory_sync', {
+          role,
+          inventory,
+        });
         break;
       }
       case 'turn_timeout': {

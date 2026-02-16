@@ -229,13 +229,22 @@ export class HomeScene extends Container {
     room.y = baseY + single.height * 2 + BUTTON_GAP * 2;
     this.addChild(room);
 
+    const freeRoom = new Button({
+      label: "🎲 多人房间",
+      width: buttonWidth,
+      onClick: () => this.opts.onModeSelect("free_room"),
+    });
+    freeRoom.x = cx;
+    freeRoom.y = baseY + single.height * 3 + BUTTON_GAP * 3;
+    this.addChild(freeRoom);
+
     const leaderboard = new Button({
       label: "🏆 排行榜",
       width: buttonWidth,
       onClick: () => this.opts.onModeSelect("leaderboard"),
     });
     leaderboard.x = cx;
-    leaderboard.y = baseY + single.height * 3 + BUTTON_GAP * 3;
+    leaderboard.y = baseY + single.height * 4 + BUTTON_GAP * 4;
     this.addChild(leaderboard);
   }
 }

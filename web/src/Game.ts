@@ -16,6 +16,11 @@ import { RoomWaitScene } from "@/scenes/RoomWaitScene";
 import { RoomPlayScene } from "@/scenes/RoomPlayScene";
 import { RoomGuessPersonScene } from "@/scenes/RoomGuessPersonScene";
 import { RoomClient } from "@/room/client";
+import { FreeRoomClient, type FreePlayerInfo, type FreeRoomMsg } from "@/freeRoom/client";
+import { FreeGuessHome } from "@/scenes/FreeGuessHome";
+import { FreeGuessLobby } from "@/scenes/FreeGuessLobby";
+import { FreeGuessPlay } from "@/scenes/FreeGuessPlay";
+import { FreeGuessSettlement } from "@/scenes/FreeGuessSettlement";
 import type { GameMode } from "@/types";
 import type { RoomRole, RoomMsg, GpCandidateQuestion } from "@/room/client";
 import { getUserUUID } from "@/utils/uuid";
@@ -24,6 +29,7 @@ export class Game {
   private homeScene: HomeScene | null = null;
   private roomClient: RoomClient | null = null;
   private currentJoinUrl: string | undefined = undefined;
+  private freeClient: FreeRoomClient | null = null;
 
   constructor(private app: Application) {}
 
@@ -36,6 +42,11 @@ export class Game {
     const roomId = params.get("room");
     if (roomId) {
       this.joinRoom(roomId);
+      return;
+    }
+    const freeCode = params.get("free");
+    if (freeCode) {
+      this.enterFreeRoom(freeCode, false);
       return;
     }
     this.showHome();
@@ -60,6 +71,10 @@ export class Game {
     }
     if (mode === "room") {
       this.showRuleSelect();
+      return;
+    }
+    if (mode === "free_room") {
+      this.showFreeGuessHome();
       return;
     }
     this.app.stage.removeChildren();
@@ -348,6 +363,116 @@ export class Game {
     this.roomClient?.close();
     this.roomClient = null;
     this.currentJoinUrl = undefined;
+    this.app.stage.removeChildren();
+    window.history.replaceState({}, "", window.location.pathname || "/");
+    this.showHome();
+  }
+
+  /* ═══════ Free Room (多人自由猜数) ═══════ */
+
+  private showFreeGuessHome(): void {
+    this.app.stage.removeChildren();
+    const scene = new FreeGuessHome({
+      app: this.app,
+      onBack: () => this.showHome(),
+      onEnterRoom: (roomCode, isHost, password) => this.enterFreeRoom(roomCode, isHost, password),
+    });
+    this.app.stage.addChild(scene);
+  }
+
+  private enterFreeRoom(roomCode: string, isHost: boolean, password?: string): void {
+    const uuid = getUserUUID();
+    const nickname = `玩家${uuid.slice(0, 4)}`;
+    const playerId = uuid;
+
+    this.freeClient = new FreeRoomClient();
+    this.freeClient.connect(roomCode, nickname, playerId, password).then(
+      () => {
+        let lobbyUnsub: (() => void) | null = null;
+        lobbyUnsub = this.freeClient!.onMessage((msg: FreeRoomMsg) => {
+          if (msg.type === "joined") {
+            lobbyUnsub?.();
+            this.showFreeGuessLobby(
+              roomCode,
+              msg.roomName ?? `房间 ${roomCode}`,
+              msg.guessLimit ?? 10,
+              isHost,
+            );
+          }
+        });
+      },
+      () => {
+        this.app.stage.removeChildren();
+        const err = new Text({
+          text: "连接房间失败",
+          style: { fontFamily: "system-ui", fontSize: 18, fill: 0xff6644 },
+        });
+        err.anchor.set(0.5);
+        err.x = this.app.screen.width / 2;
+        err.y = this.app.screen.height / 2;
+        this.app.stage.addChild(err);
+      }
+    );
+  }
+
+  private showFreeGuessLobby(roomCode: string, roomName: string, guessLimit: number, isHost: boolean): void {
+    // 更新 URL 为可分享的加入链接
+    if (typeof window !== "undefined") {
+      const joinUrl = `${window.location.pathname || "/"}?free=${roomCode}`;
+      window.history.replaceState({}, "", joinUrl);
+    }
+    this.app.stage.removeChildren();
+    const scene = new FreeGuessLobby({
+      app: this.app,
+      client: this.freeClient!,
+      roomCode,
+      roomName,
+      guessLimit,
+      isHost,
+      onBack: () => this.leaveFreeRoom(),
+      onGameStart: (limit, players) => this.showFreeGuessPlay(limit, players, isHost),
+    });
+    this.app.stage.addChild(scene);
+  }
+
+  private showFreeGuessPlay(guessLimit: number, players: FreePlayerInfo[], isHost: boolean): void {
+    this.app.stage.removeChildren();
+    const scene = new FreeGuessPlay({
+      app: this.app,
+      client: this.freeClient!,
+      guessLimit,
+      players,
+      onBack: () => this.leaveFreeRoom(),
+      onGameOver: (msg) => this.showFreeGuessSettlement(msg, isHost),
+    });
+    this.app.stage.addChild(scene);
+  }
+
+  private showFreeGuessSettlement(msg: FreeRoomMsg, isHost: boolean): void {
+    this.app.stage.removeChildren();
+    const scene = new FreeGuessSettlement({
+      app: this.app,
+      msg,
+      myPlayerId: this.freeClient!.playerId,
+      isHost,
+      onRestart: () => {
+        this.freeClient!.restart();
+        let restartUnsub: (() => void) | null = null;
+        restartUnsub = this.freeClient!.onMessage((m: FreeRoomMsg) => {
+          if (m.type === "game_start") {
+            restartUnsub?.();
+            this.showFreeGuessPlay(m.guessLimit ?? 10, m.players ?? [], isHost);
+          }
+        });
+      },
+      onExit: () => this.leaveFreeRoom(),
+    });
+    this.app.stage.addChild(scene);
+  }
+
+  private leaveFreeRoom(): void {
+    this.freeClient?.close();
+    this.freeClient = null;
     this.app.stage.removeChildren();
     window.history.replaceState({}, "", window.location.pathname || "/");
     this.showHome();

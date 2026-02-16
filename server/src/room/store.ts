@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 import { randomBytes } from 'crypto';
 import { getRandomPerson, pickCandidateQuestions, type PersonCharacter, type PersonQuestion } from './personData.js';
+import { getInitialInventory } from '../config/items.js';
 
 export type RoomRole = 'host' | 'guest';
 
@@ -30,9 +31,9 @@ export interface Room {
   guestCode: string | null;
   turn: RoomRole | null;
   createdAt: number;
-  /** 道具使用状态：每方各一次「减时」机会 */
-  hostItemUsed: boolean;
-  guestItemUsed: boolean;
+  /** 道具背包 - 每方独立的道具库存 */
+  hostInventory: { [itemId: string]: number };
+  guestInventory: { [itemId: string]: number };
   /** 游戏历史记录（用于重连恢复） */
   history: {
     role: RoomRole;
@@ -76,8 +77,8 @@ export function createRoom(rule: RoomRule = 'standard'): { roomId: string; room:
     hostCode: null,
     guestCode: null,
     turn: null,
-    hostItemUsed: false,
-    guestItemUsed: false,
+    hostInventory: getInitialInventory(rule),
+    guestInventory: getInitialInventory(rule),
     createdAt: Date.now(),
     history: [],
   };

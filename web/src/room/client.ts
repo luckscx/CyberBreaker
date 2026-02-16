@@ -29,8 +29,12 @@ export interface RoomMsg {
   guestCodeSet?: boolean;
   /** 服务器下发的本回合开始时间戳（毫秒），用于双方统一倒计时 */
   turnStartAt?: number;
-  hostItemUsed?: boolean;
-  guestItemUsed?: boolean;
+  /** 道具背包 */
+  inventory?: { [itemId: string]: number };
+  /** 道具 ID */
+  itemId?: string;
+  /** 道具效果数据 */
+  effectData?: any;
   /** 是否为重连 */
   isReconnect?: boolean;
   /** 游戏历史记录 */
@@ -142,9 +146,9 @@ export class RoomClient {
     }
   }
 
-  useItem(): void {
+  useItem(itemId: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "use_item" }));
+      this.ws.send(JSON.stringify({ type: "use_item", itemId }));
     }
   }
 
