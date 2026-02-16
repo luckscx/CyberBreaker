@@ -391,16 +391,8 @@ export class CampaignScene extends Container {
     this.gameState = PowerUpEffects.apply(this.gameState, type);
     this.gameState.availablePowerUps[type] = count - 1;
 
-    // 更新背包按钮数量
-    const totalItems = Object.values(this.gameState.availablePowerUps).reduce((sum, c) => sum + c, 0);
-    if (this.backpackButton) {
-      this.backpackButton.updateCount(totalItems);
-    }
-
-    // 更新背包模态框中的数量（如果打开）
-    if (this.backpackModal) {
-      this.backpackModal.updateItemCount(type, count - 1);
-    }
+    // 关闭背包模态框（稍后会重建UI）
+    this._hideBackpack();
 
     this._updateEffectHint();
     this._buildSlots();
@@ -415,7 +407,6 @@ export class CampaignScene extends Container {
       this.historyText,
       this.timerText,
       this.guessesText,
-      this.backpackButton,
     ].filter(Boolean);
 
     // 找到并移除键盘和其他临时元素
@@ -575,6 +566,10 @@ export class CampaignScene extends Container {
     panel.position.set(width / 2 - 200, height / 2 - 175);
     this.addChild(panel);
 
+    const btnWidth = 120;
+    const widthOffset = 10;
+    const heightOffset = 60;
+
     if (victory) {
       const title = new Text({
         text: isPerfect ? "🏆 完美通关！" : "✅ 通关成功！",
@@ -607,7 +602,7 @@ export class CampaignScene extends Container {
 
       const nextBtn = new Button({
         label: "下一关",
-        width: 130,
+        width: btnWidth,
         fontSize: 15,
         onClick: () => {
           this._stopTimer();
@@ -616,20 +611,20 @@ export class CampaignScene extends Container {
           }
         },
       });
-      nextBtn.position.set(width / 2 - 140, height / 2 + 60);
+      nextBtn.position.set(width / 2 - btnWidth / 2 - widthOffset, height / 2 + heightOffset);
       this.addChild(nextBtn);
 
       // 返回按钮（横向排列在右侧）
       const backBtn = new Button({
         label: "返回",
-        width: 130,
+        width: btnWidth,
         fontSize: 15,
         onClick: () => {
           this._stopTimer();
           this.opts.onBack();
         },
       });
-      backBtn.position.set(width / 2 + 10, height / 2 + 60);
+      backBtn.position.set(width / 2 + btnWidth / 2 + widthOffset, height / 2 + heightOffset);
       this.addChild(backBtn);
     } else {
       const title = new Text({
@@ -653,29 +648,16 @@ export class CampaignScene extends Container {
       secretText.position.set(width / 2, height / 2 - 20);
       this.addChild(secretText);
 
-      const retryBtn = new Button({
-        label: "重试",
-        width: 130,
-        fontSize: 15,
-        onClick: () => {
-          this._stopTimer();
-          this.opts.onBack();
-        },
-      });
-      retryBtn.position.set(width / 2 - 140, height / 2 + 40);
-      this.addChild(retryBtn);
-
-      // 返回按钮（横向排列在右侧）
       const backBtn = new Button({
         label: "返回",
-        width: 130,
+        width: btnWidth,
         fontSize: 15,
         onClick: () => {
           this._stopTimer();
           this.opts.onBack();
         },
       });
-      backBtn.position.set(width / 2 + 10, height / 2 + 40);
+      backBtn.position.set(width / 2, height / 2 + heightOffset);
       this.addChild(backBtn);
     }
   }
@@ -820,20 +802,25 @@ export class CampaignScene extends Container {
       }
     };
 
+
+    const btnWidth = 100;
+    const widthOffset = 10;
+    const heightOffset = 70;
+
     // 提交按钮（左侧）
     const submitBtn = new Button({
       label: "提交成绩",
-      width: 130,
+      width: btnWidth,
       fontSize: 15,
       onClick: handleSubmit,
     });
-    submitBtn.position.set(width / 2 - 140, height / 2 + 70);
+    submitBtn.position.set(width / 2 - btnWidth / 2 - widthOffset, height / 2 + heightOffset);
     this.addChild(submitBtn);
 
     // 跳过按钮（右侧）
     const skipBtn = new Button({
       label: "跳过",
-      width: 130,
+      width: btnWidth,
       fontSize: 15,
       onClick: () => {
         playClick();
@@ -848,7 +835,7 @@ export class CampaignScene extends Container {
         this._showResult(true, stars, isPerfect);
       },
     });
-    skipBtn.position.set(width / 2 + 10, height / 2 + 70);
+    skipBtn.position.set(width / 2 + btnWidth / 2 + widthOffset, height / 2 + heightOffset);
     this.addChild(skipBtn);
 
     // 回车提交
