@@ -117,7 +117,7 @@ export class GuessInput extends Container {
         });
         text.anchor.set(0.5);
         text.x = i * (SS + SG);
-        text.name = `slot-${i}`;
+        text.label = `slot-${i}`;
         this.slotContainer.addChild(text);
       }
       this.slotContainer.x = -slotsW / 2 + SS / 2;
@@ -229,7 +229,7 @@ export class GuessInput extends Container {
     if (this.slotContainer) {
       const digits = this._guess.split("");
       for (let i = 0; i < 4; i++) {
-        const t = this.slotContainer.getChildByName(`slot-${i}`) as Text;
+        const t = this.slotContainer.getChildByLabel(`slot-${i}`) as Text;
         if (t) t.text = digits[i] ?? "?";
       }
     }

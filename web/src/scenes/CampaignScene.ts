@@ -273,13 +273,16 @@ export class CampaignScene extends Container {
     const gap = 10;
 
     for (let i = 0; i < 4; i++) {
-      const slot = new Graphics();
+      const slot = new Container();
+      const slotBg = new Graphics();
       const revealed = revealedPos.find((r) => r.pos === i);
 
       if (revealed) {
         // 已揭示的位置 - 显示数字
-        slot.roundRect(0, 0, slotWidth, slotHeight, 8).fill({ color: 0x00ff44 });
-        slot.roundRect(0, 0, slotWidth, slotHeight, 8).stroke({ color: 0x00ff88, width: 3 });
+        slotBg.roundRect(0, 0, slotWidth, slotHeight, 8).fill({ color: 0x00ff44 });
+        slotBg.roundRect(0, 0, slotWidth, slotHeight, 8).stroke({ color: 0x00ff88, width: 3 });
+        slot.addChild(slotBg);
+
         const digitText = new Text({
           text: revealed.digit,
           style: { fontFamily: "Arial", fontSize: 36, fill: 0xffffff, fontWeight: "bold" },
@@ -289,8 +292,10 @@ export class CampaignScene extends Container {
         slot.addChild(digitText);
       } else {
         const digit = this.gameState.currentGuess[i] || "";
-        slot.roundRect(0, 0, slotWidth, slotHeight, 8).fill({ color: 0x1a2a3a });
-        slot.roundRect(0, 0, slotWidth, slotHeight, 8).stroke({ color: 0x00aaff, width: 2 });
+        slotBg.roundRect(0, 0, slotWidth, slotHeight, 8).fill({ color: 0x1a2a3a });
+        slotBg.roundRect(0, 0, slotWidth, slotHeight, 8).stroke({ color: 0x00aaff, width: 2 });
+        slot.addChild(slotBg);
+
         if (digit) {
           const digitText = new Text({
             text: digit,
@@ -545,7 +550,8 @@ export class CampaignScene extends Container {
 
       const nextBtn = new Button({
         label: "下一关",
-        width: 120,
+        width: 130,
+        fontSize: 15,
         onClick: () => {
           this._stopTimer();
           if (this.opts.onNextLevel) {
@@ -553,8 +559,21 @@ export class CampaignScene extends Container {
           }
         },
       });
-      nextBtn.position.set(width / 2 - 65, height / 2 + 60);
+      nextBtn.position.set(width / 2 - 140, height / 2 + 60);
       this.addChild(nextBtn);
+
+      // 返回按钮（横向排列在右侧）
+      const backBtn = new Button({
+        label: "返回",
+        width: 130,
+        fontSize: 15,
+        onClick: () => {
+          this._stopTimer();
+          this.opts.onBack();
+        },
+      });
+      backBtn.position.set(width / 2 + 10, height / 2 + 60);
+      this.addChild(backBtn);
     } else {
       const title = new Text({
         text: "❌ 挑战失败",
@@ -579,26 +598,29 @@ export class CampaignScene extends Container {
 
       const retryBtn = new Button({
         label: "重试",
-        width: 120,
+        width: 130,
+        fontSize: 15,
         onClick: () => {
           this._stopTimer();
           this.opts.onBack();
         },
       });
-      retryBtn.position.set(width / 2 - 65, height / 2 + 40);
+      retryBtn.position.set(width / 2 - 140, height / 2 + 40);
       this.addChild(retryBtn);
-    }
 
-    const backBtn = new Button({
-      label: "返回",
-      width: 120,
-      onClick: () => {
-        this._stopTimer();
-        this.opts.onBack();
-      },
-    });
-    backBtn.position.set(width / 2 - 65, height / 2 + (victory ? 110 : 90));
-    this.addChild(backBtn);
+      // 返回按钮（横向排列在右侧）
+      const backBtn = new Button({
+        label: "返回",
+        width: 130,
+        fontSize: 15,
+        onClick: () => {
+          this._stopTimer();
+          this.opts.onBack();
+        },
+      });
+      backBtn.position.set(width / 2 + 10, height / 2 + 40);
+      this.addChild(backBtn);
+    }
   }
 
   /**
@@ -673,7 +695,7 @@ export class CampaignScene extends Container {
       position: fixed;
       left: 50%;
       top: 50%;
-      transform: translate(-50%, -50%);
+      transform: translate(-50%, -10px);
       width: 300px;
       padding: 10px;
       font-size: 16px;
@@ -741,19 +763,21 @@ export class CampaignScene extends Container {
       }
     };
 
-    // 提交按钮
+    // 提交按钮（左侧）
     const submitBtn = new Button({
-      label: "提交",
-      width: 120,
+      label: "提交成绩",
+      width: 130,
+      fontSize: 15,
       onClick: handleSubmit,
     });
-    submitBtn.position.set(width / 2 - 130, height / 2 + 60);
+    submitBtn.position.set(width / 2 - 140, height / 2 + 70);
     this.addChild(submitBtn);
 
-    // 跳过按钮
+    // 跳过按钮（右侧）
     const skipBtn = new Button({
       label: "跳过",
-      width: 120,
+      width: 130,
+      fontSize: 15,
       onClick: () => {
         playClick();
         document.body.removeChild(input);
@@ -767,7 +791,7 @@ export class CampaignScene extends Container {
         this._showResult(true, stars, isPerfect);
       },
     });
-    skipBtn.position.set(width / 2 + 10, height / 2 + 60);
+    skipBtn.position.set(width / 2 + 10, height / 2 + 70);
     this.addChild(skipBtn);
 
     // 回车提交
