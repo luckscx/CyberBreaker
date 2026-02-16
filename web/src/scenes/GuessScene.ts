@@ -78,6 +78,13 @@ export class GuessScene extends Container {
     rulesText.y = top + 52;
     this.addChild(rulesText);
 
+    // Layout: Left 60% for input, Right 40% for history
+    const inputStartY = top + 72;
+    const leftWidth = w * 0.6;
+    const rightWidth = w * 0.4;
+    const padding = 12;
+
+    // Left side: Input (centered in 60% area)
     this.guessInput = new GuessInput({
       slotSize: 48,
       slotGap: 6,
@@ -90,27 +97,31 @@ export class GuessScene extends Container {
       actionFontSize: 13,
       onSubmit: (guess) => this._confirm(guess),
     });
-    this.guessInput.x = cx;
-    this.guessInput.y = top + 72;
+    // Center the input in the left 60% area
+    this.guessInput.x = leftWidth / 2;
+    this.guessInput.y = inputStartY;
     this.addChild(this.guessInput);
 
-    const resultY = top + 72 + this.guessInput.totalHeight + 4;
+    // Result text below input
+    const resultY = inputStartY + this.guessInput.totalHeight + 8;
     this.resultText = new Text({
       text: "",
       style: { fontFamily: "system-ui", fontSize: 15, fill: 0x88ff88, fontWeight: "bold" },
     });
     this.resultText.anchor.set(0.5, 0);
-    this.resultText.x = cx;
+    this.resultText.x = leftWidth / 2;
     this.resultText.y = resultY;
     this.addChild(this.resultText);
 
+    // Right side: History (in the 40% area)
+    const historyX = leftWidth + padding;
     this.historyText = new Text({
       text: "历史记录：",
-      style: { fontFamily: "Courier New, monospace", fontSize: 12, fill: 0x99aabb },
+      style: { fontFamily: "Courier New, monospace", fontSize: 11, fill: 0x99aabb, align: "left", wordWrap: true, wordWrapWidth: rightWidth - padding * 2 },
     });
-    this.historyText.anchor.set(0.5, 0);
-    this.historyText.x = cx;
-    this.historyText.y = resultY + 22;
+    this.historyText.anchor.set(0, 0);
+    this.historyText.x = historyX;
+    this.historyText.y = inputStartY;
     this.addChild(this.historyText);
 
     // Start animation
@@ -148,6 +159,6 @@ export class GuessScene extends Container {
 
   private _updateHistoryText(): void {
     const lines = this.history.map(({ guess, a, b }) => `${guess} → ${a}A${b}B`);
-    this.historyText.text = "历史记录：\n" + lines.slice(-6).join("\n");
+    this.historyText.text = "历史记录：\n" + lines.slice(-10).join("\n");
   }
 }

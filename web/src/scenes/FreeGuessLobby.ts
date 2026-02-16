@@ -150,7 +150,7 @@ export class FreeGuessLobby extends Container {
     this.playerCountText.text = `玩家 ${this.players.length}/8`;
 
     if (this.startBtn) {
-      const canStart = this.players.length >= 2;
+      const canStart = this.players.length >= 1;
       this.startBtn.eventMode = canStart ? "static" : "none";
       this.startBtn.alpha = canStart ? 1 : 0.4;
     }

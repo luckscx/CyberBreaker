@@ -26,6 +26,30 @@ export class HomeScene extends Container {
 
   private _addMusicButton(): void {
     const toggleSize = 48;
+
+    // Settings button (left side of music toggle)
+    const settingsBtn = new Container();
+
+    const settingsCircle = new Graphics();
+    settingsCircle.circle(0, 0, toggleSize / 2).fill({ color: 0x1a2332, alpha: 0.8 });
+    settingsCircle.circle(0, 0, toggleSize / 2).stroke({ width: 2, color: 0x334455 });
+    settingsBtn.addChild(settingsCircle);
+
+    const settingsText = new Text({
+      text: "⚙️",
+      style: { fontSize: 24 },
+    });
+    settingsText.anchor.set(0.5);
+    settingsBtn.addChild(settingsText);
+
+    settingsBtn.x = this.app.screen.width - 16 - toggleSize * 2 - 10;
+    settingsBtn.y = 16 + toggleSize / 2;
+    settingsBtn.eventMode = "static";
+    settingsBtn.cursor = "pointer";
+    settingsBtn.on("pointerdown", () => this.opts.onModeSelect("settings"));
+    this.addChild(settingsBtn);
+
+    // Music toggle
     const musicToggle = new MusicToggle({
       x: this.app.screen.width - 16 - toggleSize,
       y: 16,
@@ -131,7 +155,7 @@ export class HomeScene extends Container {
 
     // Title text - 缩小字号
     const t = new Text({
-      text: "潜行解码",
+      text: "赛博密码",
       style: {
         fontFamily: "system-ui, sans-serif",
         fontSize: 40,

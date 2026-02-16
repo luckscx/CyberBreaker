@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**潜行解码 (Cyber Breaker)** is an H5 competitive puzzle game based on the classic "1A2B" (Mastermind) logic game. The game features:
+**赛博密码 (Cyber Breaker)** is an H5 competitive puzzle game based on the classic "1A2B" (Mastermind) logic game. The game features:
 - **Campaign Mode**: 20 structured levels with power-ups and star ratings
 - **Tutorial Mode**: Free practice mode with game rules explanation
 - **Room PVP**: Real-time 1v1 battles via WebSocket
@@ -171,6 +171,20 @@ Both packages use strict TypeScript:
 - Progress saved to localStorage via `ProgressManager`
 - Path alias `@/` maps to `src/`
 - **Never add manual `playClick()` calls in Button/KeyButton onClick callbacks** - components handle this internally
+- **Pixi.js v8 Container-only children**: Only `Container` instances can have children. When creating interactive elements with Graphics, wrap Graphics in a Container first:
+  ```typescript
+  // ❌ Wrong - Graphics cannot have children in v8
+  const btn = new Graphics();
+  btn.circle(0, 0, 24).fill({ color: 0x1a2332 });
+  btn.addChild(textElement); // Will cause deprecation warning
+
+  // ✅ Correct - Wrap in Container
+  const btn = new Container();
+  const circle = new Graphics();
+  circle.circle(0, 0, 24).fill({ color: 0x1a2332 });
+  btn.addChild(circle);
+  btn.addChild(textElement);
+  ```
 
 ## Data Persistence
 
@@ -201,7 +215,7 @@ No test framework currently configured. When adding tests:
 
 ## Development Guidelines
 
-- **No documentation generation during development** - focus on code implementation
+- **No documentation generation during development** - focus on code implementation, do not create markdown documentation files after completing tasks
 - **Mobile-first UI** - all layouts optimized for portrait phone screens
 - **Audio feedback** - ensure all interactions have sound
 - **Progressive enhancement** - campaign mode works offline, multiplayer requires server

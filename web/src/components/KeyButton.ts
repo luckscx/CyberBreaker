@@ -1,5 +1,5 @@
 import { Container, Graphics, Rectangle, Text } from "pixi.js";
-import { playClick } from "@/audio/click";
+import { playClick, playDisabledClick } from "@/audio/click";
 
 const DEPTH = 4; // 3D 深度
 const RADIUS = 6;
@@ -11,6 +11,7 @@ export interface KeyButtonOptions {
   fontSize?: number;
   onClick: () => void;
   playSound?: boolean; // 是否播放点击音效，默认true
+  disabled?: boolean; // 禁用态：灰色、按下播放闷音
 }
 
 export class KeyButton extends Container {
@@ -24,14 +25,16 @@ export class KeyButton extends Container {
   private animFrame: number = 0;
   private currentDepth = DEPTH;
   private playSound: boolean;
+  private _disabled: boolean;
 
   constructor(opts: KeyButtonOptions) {
     super();
     this._w = opts.width;
     this._h = opts.height;
-    this.playSound = opts.playSound ?? true; // 默认播放音效
+    this.playSound = opts.playSound ?? true;
+    this._disabled = opts.disabled ?? false;
     this.eventMode = "static";
-    this.cursor = "pointer";
+    this.cursor = this._disabled ? "not-allowed" : "pointer";
 
     // Bottom shadow (最底层)
     this.bottomShadow = new Graphics();
@@ -73,11 +76,14 @@ export class KeyButton extends Container {
     );
 
     this._draw3DButton(DEPTH);
+    this._updateDisabledLook();
 
-    this.on("pointerdown", (e) => {
-      if (this.playSound) {
-        playClick();
+    this.on("pointerdown", () => {
+      if (this._disabled) {
+        playDisabledClick();
+        return;
       }
+      if (this.playSound) playClick();
       this._animatePress();
       opts.onClick();
     });
@@ -94,6 +100,28 @@ export class KeyButton extends Container {
 
   setLabel(text: string): void {
     this.labelText.text = text;
+  }
+
+  setDisabled(disabled: boolean): void {
+    if (this._disabled === disabled) return;
+    this._disabled = disabled;
+    this.cursor = disabled ? "not-allowed" : "pointer";
+    this._updateDisabledLook();
+  }
+
+  get disabled(): boolean {
+    return this._disabled;
+  }
+
+  private _updateDisabledLook(): void {
+    const gray = 0x668899;
+    if (this._disabled) {
+      this.tint = gray;
+      this.alpha = 0.65;
+    } else {
+      this.tint = 0xffffff;
+      this.alpha = 1;
+    }
   }
 
   private _draw3DButton(depth: number): void {
@@ -161,7 +189,7 @@ export class KeyButton extends Container {
   }
 
   private _animateHover(entering: boolean): void {
-    if (this.isPressed) return;
+    if (this.isPressed || this._disabled) return;
 
     const targetY = entering ? -2 : 0;
     const startY = this.topFace.y + DEPTH;

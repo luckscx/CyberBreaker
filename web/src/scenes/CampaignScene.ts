@@ -13,6 +13,7 @@ import { generateSecret, evaluate, isValidGuess } from "../logic/guess";
 import { PowerUpEffects } from "../logic/powerUpEffects";
 import { playClick } from "../audio/click";
 import { submitCampaignScore } from "../api/leaderboard";
+import { getNickname, setNickname } from "../services/settingsManager";
 
 export interface CampaignSceneOptions {
   levelId: number;
@@ -667,6 +668,7 @@ export class CampaignScene extends Container {
     input.type = "text";
     input.placeholder = "请输入昵称 (最多20字)";
     input.maxLength = 20;
+    input.value = getNickname(); // 使用Cookie中保存的昵称作为默认值
     input.style.cssText = `
       position: fixed;
       left: 50%;
@@ -713,6 +715,11 @@ export class CampaignScene extends Container {
           guessCount,
           timeMs,
         });
+
+        // 保存昵称到Cookie（如果用户修改了）
+        if (playerName !== getNickname()) {
+          setNickname(playerName);
+        }
 
         // 移除输入框和对话框
         document.body.removeChild(input);

@@ -1,6 +1,5 @@
 import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
-import { Button } from "@/components/Button";
 import { GuessInput } from "@/components/GuessInput";
 import { MusicToggle } from "@/components/MusicToggle";
 import { BackButton } from "@/components/BackButton";
@@ -28,6 +27,7 @@ export interface RoomPlaySceneOptions {
   rule: RoomRule;
   myCode: string; // 自己设置的密码
   joinUrl?: string;
+  inventory?: { [itemId: string]: number }; // 初始道具背包
   onBack: () => void;
   /** 重连时的历史记录 */
   history?: {
@@ -61,21 +61,22 @@ export class RoomPlayScene extends Container {
   private gameOverParticles: Particle[] = [];
   private gameOverTickerBound: ((ticker: { deltaMS: number }) => void) | null = null;
   private rule: RoomRule;
-  private myItemUsed = false;
-  private peerItemUsed = false;
-  private itemBtn: Button | null = null;
+  private inventory: { [itemId: string]: number } = {};
+  private backpackButton: BackpackButton | null = null;
+  private backpackModal: BackpackModal | null = null;
   private itemEffectText: Text | null = null;
-  private static readonly ITEM_REDUCE_SEC = 20;
+  private static readonly ITEM_REDUCE_SEC = 10;
 
   constructor(opts: RoomPlaySceneOptions) {
     super();
-    const { app, client, myRole, initialTurn, turnStartAt, rule, myCode, joinUrl, onBack, history } = opts;
+    const { app, client, myRole, initialTurn, turnStartAt, rule, myCode, joinUrl, onBack, history, inventory } = opts;
     this.app = app;
     this.client = client;
     this.myRole = myRole;
     this.turn = initialTurn;
     this.turnStartAt = turnStartAt;
     this.rule = rule;
+    this.inventory = inventory ?? {};
     const w = app.screen.width;
     const cx = w / 2;
 
@@ -117,6 +118,16 @@ export class RoomPlayScene extends Container {
       y: 16,
     });
     this.addChild(musicToggle);
+
+    // 背包按钮
+    const totalItems = Object.values(this.inventory).reduce((sum, count) => sum + count, 0);
+    this.backpackButton = new BackpackButton({
+      x: w - 16 - toggleSize * 2 - 10,
+      y: 16,
+      onClick: () => this._showBackpack(),
+    });
+    this.backpackButton.updateCount(totalItems);
+    this.addChild(this.backpackButton);
 
     this.turnText = new Text({
       text: this.turn === myRole ? "你的回合" : "对方回合",
@@ -198,37 +209,15 @@ export class RoomPlayScene extends Container {
     this.peerHistoryText.y = historyY + 18;
     this.addChild(this.peerHistoryText);
 
-    // 道具按钮 & 说明：放在页面最底部
+    // 道具效果提示文字
     const h = app.screen.height;
-
-    const itemHint = new Text({
-      text: "对手回合 -20秒",
-      style: { fontFamily: "system-ui", fontSize: 11, fill: 0x668899 },
-    });
-    itemHint.anchor.set(0.5);
-    itemHint.x = cx;
-    itemHint.y = h - 58;
-    this.addChild(itemHint);
-
-    this.itemBtn = new Button({
-      label: "⚡ 减时道具（1次）",
-      width: 140,
-      fontSize: 12,
-      onClick: () => {
-        this._useItem();
-      },
-    });
-    this.itemBtn.x = cx;
-    this.itemBtn.y = h - 32;
-    this.addChild(this.itemBtn);
-
     this.itemEffectText = new Text({
       text: "",
       style: { fontFamily: "system-ui", fontSize: 13, fill: 0xff6644, fontWeight: "bold" },
     });
     this.itemEffectText.anchor.set(0.5);
     this.itemEffectText.x = cx;
-    this.itemEffectText.y = h - 75;
+    this.itemEffectText.y = h - 50;
     this.addChild(this.itemEffectText);
 
     this.guessInput.setEnabled(this.turn === myRole);
@@ -386,37 +375,166 @@ export class RoomPlayScene extends Container {
     this.resultText.text = "";
     this.guessInput.setEnabled(this.turn === this.myRole);
     this._startCountdown();
+
+    // 更新背包禁用状态（只能在自己回合使用）
+    if (this.backpackModal) {
+      this.backpackModal.setDisabled(this.turn !== this.myRole);
+    }
   }
 
-  private _useItem(): void {
-    if (this.myItemUsed || this.gameOver) return;
-    this.client.useItem("reduce_opponent_time");
+  private _showBackpack(): void {
+    if (this.backpackModal || this.gameOver) return;
+
+    const items = inventoryToItemData(this.inventory);
+    this.backpackModal = new BackpackModal({
+      app: this.app,
+      items,
+      disabled: this.turn !== this.myRole,
+      onUseItem: (itemId) => this._useItem(itemId),
+      onClose: () => this._hideBackpack(),
+    });
+    this.addChild(this.backpackModal);
   }
 
-  private _onItemUsed(byRole: RoomRole): void {
-    if (byRole === this.myRole) {
-      // 我方使用：标记已用，禁用按钮
-      this.myItemUsed = true;
-      if (this.itemBtn) {
-        this.itemBtn.setLabel("已使用");
-        this.itemBtn.eventMode = "none";
-        this.itemBtn.alpha = 0.4;
-      }
-    } else {
-      // 对方使用：标记对方已用
-      this.peerItemUsed = true;
+  private _hideBackpack(): void {
+    if (this.backpackModal) {
+      this.removeChild(this.backpackModal);
+      this.backpackModal.destroy();
+      this.backpackModal = null;
+    }
+  }
+
+  private _useItem(itemId: string): void {
+    if (this.gameOver || this.turn !== this.myRole) return;
+
+    const count = this.inventory[itemId] ?? 0;
+    if (count <= 0) {
+      this._showItemEffect("道具数量不足");
+      return;
     }
 
-    if (byRole !== this.myRole) {
-      // 对方对我使用 → 我当前回合立即减 20 秒（把 turnStartAt 往前推）
-      this.turnStartAt -= RoomPlayScene.ITEM_REDUCE_SEC * 1000;
-      this._startCountdown(); // 立刻刷新倒计时
-      this._showItemEffect("对方使用了⚡减时！-20s");
+    // 发送使用道具消息
+    this.client.useItem(itemId);
+
+    // 乐观更新本地库存
+    this.inventory[itemId] = count - 1;
+
+    // 更新背包按钮徽章
+    const totalItems = Object.values(this.inventory).reduce((sum, c) => sum + c, 0);
+    if (this.backpackButton) {
+      this.backpackButton.updateCount(totalItems);
+    }
+
+    // 更新模态框中的道具卡片
+    if (this.backpackModal) {
+      this.backpackModal.updateItemCount(itemId, this.inventory[itemId]);
+    }
+
+    // 关闭背包
+    this._hideBackpack();
+  }
+
+  private _onItemUsed(msg: any): void {
+    const role = msg.role as RoomRole;
+    const itemId = msg.itemId as string;
+    const effectData = msg.effectData;
+
+    if (role === this.myRole) {
+      // 我方使用道具
+      this._applyItemEffect(itemId, effectData, true);
     } else {
-      // 我对对方使用（对方的倒计时由对方客户端处理，我这边也前推保持同步）
-      this.turnStartAt -= RoomPlayScene.ITEM_REDUCE_SEC * 1000;
-      this._startCountdown();
-      this._showItemEffect("⚡已对对方使用减时！");
+      // 对方使用道具
+      this._applyItemEffect(itemId, effectData, false);
+    }
+  }
+
+  private _applyItemEffect(itemId: string, effectData: any, isMyItem: boolean): void {
+    const effect = effectData?.effect;
+
+    switch (effect) {
+      case 'reveal_one':
+        if (!isMyItem && effectData?.position != null && effectData?.digit != null) {
+          this._showItemEffect(`💡 对方揭示了一个位置：位置${effectData.position + 1}是${effectData.digit}`);
+        } else if (isMyItem) {
+          this._showItemEffect(`🔍 已揭示位置${effectData.position + 1}：${effectData.digit}`);
+        }
+        break;
+
+      case 'eliminate_two':
+        if (!isMyItem && effectData?.eliminated) {
+          this._showItemEffect(`❌ 对方排除了数字：${effectData.eliminated.join(', ')}`);
+        } else if (isMyItem) {
+          this._showItemEffect(`❌ 已排除数字：${effectData.eliminated.join(', ')}`);
+        }
+        break;
+
+      case 'hint':
+        if (!isMyItem && effectData?.digits) {
+          this._showItemEffect(`💡 对方获得了提示：${effectData.digits.join(', ')}`);
+        } else if (isMyItem) {
+          this._showItemEffect(`💡 提示：答案包含数字 ${effectData.digits.join(', ')}`);
+        }
+        break;
+
+      case 'extra_time':
+        if (effectData?.targetRole === this.myRole) {
+          // 给自己加时间
+          this.turnStartAt -= effectData.seconds * 1000;
+          this._startCountdown();
+          this._showItemEffect(`⏰ 时间+${effectData.seconds}秒`);
+        } else if (isMyItem) {
+          this._showItemEffect(`⏰ 已为自己增加${effectData.seconds}秒`);
+        }
+        break;
+
+      case 'reduce_opponent_time':
+        if (effectData?.targetRole === this.myRole) {
+          // 对方减我的时间
+          this.turnStartAt += Math.abs(effectData.seconds) * 1000;
+          this._startCountdown();
+          this._showItemEffect(`⏳ 对方使用了减时！-${Math.abs(effectData.seconds)}秒`);
+        } else if (isMyItem) {
+          this._showItemEffect(`⏳ 已减少对方${Math.abs(effectData.seconds)}秒`);
+        }
+        break;
+
+      case 'limit_opponent_guesses':
+        if (effectData?.targetRole === this.myRole) {
+          this._showItemEffect(`🚫 对方限制了你的猜测次数！`);
+        } else if (isMyItem) {
+          this._showItemEffect(`🚫 已限制对方猜测次数`);
+        }
+        break;
+
+      default:
+        if (isMyItem) {
+          this._showItemEffect(`✓ 已使用道具`);
+        } else {
+          this._showItemEffect(`对方使用了道具`);
+        }
+    }
+  }
+
+  private _onInventorySync(msg: any): void {
+    const role = msg.role as RoomRole;
+    const inventory = msg.inventory as { [itemId: string]: number };
+
+    if (role === this.myRole) {
+      // 同步服务器下发的库存
+      this.inventory = inventory;
+
+      // 更新背包按钮徽章
+      const totalItems = Object.values(this.inventory).reduce((sum, c) => sum + c, 0);
+      if (this.backpackButton) {
+        this.backpackButton.updateCount(totalItems);
+      }
+
+      // 如果背包打开着，更新其中的道具卡片
+      if (this.backpackModal) {
+        Object.keys(inventory).forEach(itemId => {
+          this.backpackModal?.updateItemCount(itemId, inventory[itemId]);
+        });
+      }
     }
   }
 
@@ -445,9 +563,13 @@ export class RoomPlayScene extends Container {
     void startFade;
   }
 
-  private _onMsg(msg: { type: string; role?: RoomRole; nextTurn?: RoomRole; turnStartAt?: number; guess?: string; result?: string; winner?: RoomRole; error?: string }): void {
+  private _onMsg(msg: { type: string; role?: RoomRole; nextTurn?: RoomRole; turnStartAt?: number; guess?: string; result?: string; winner?: RoomRole; error?: string; itemId?: string; effectData?: any; inventory?: { [itemId: string]: number } }): void {
     if (msg.type === "item_used") {
-      if (msg.role) this._onItemUsed(msg.role);
+      this._onItemUsed(msg);
+      return;
+    }
+    if (msg.type === "inventory_sync") {
+      this._onInventorySync(msg);
       return;
     }
     if (msg.type === "turn_switch") {

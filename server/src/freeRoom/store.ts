@@ -1,4 +1,5 @@
 import type { WebSocket } from 'ws';
+import { FREE_MODE_DEFAULT_INVENTORY } from './items.js';
 
 export type FreeRoomState = 'waiting' | 'playing' | 'finished';
 
@@ -10,6 +11,12 @@ export interface FreePlayer {
   bestScore: number;
   eliminated: boolean;
   history: { guess: string; a: number; b: number }[];
+  inventory: { [itemId: string]: number };
+  itemEffects: {
+    eliminatedDigits?: string[];
+    revealedPositions?: Array<{ pos: number; digit: string }>;
+    knownDigits?: string[];
+  };
 }
 
 export interface FreeRoom {
@@ -99,9 +106,11 @@ export function addPlayer(room: FreeRoom, ws: WebSocket, playerId: string, nickn
     bestScore: 0,
     eliminated: false,
     history: [],
+    inventory: { ...FREE_MODE_DEFAULT_INVENTORY },
+    itemEffects: {},
   };
   room.players.push(player);
-  if (room.players.length === 1) room.hostId = playerId;
+  if (!room.hostId) room.hostId = playerId;
   return true;
 }
 
@@ -170,4 +179,38 @@ export function getRanking(room: FreeRoom): { playerId: string; nickname: string
     bestScore: p.bestScore,
     rank: i + 1,
   }));
+}
+
+/** 添加 Bot 玩家 */
+export function addBotPlayer(room: FreeRoom): FreePlayer {
+  // Create a fake WebSocket for the bot (won't be used)
+  const fakeWs = {
+    readyState: 1, // OPEN
+    send: () => {},
+    close: () => {},
+    CONNECTING: 0,
+    OPEN: 1,
+    CLOSING: 2,
+    CLOSED: 3,
+  } as any;
+
+  const botPlayer: FreePlayer = {
+    ws: fakeWs,
+    playerId: 'bot_' + Math.random().toString(36).slice(2, 8),
+    nickname: '🤖 AI助手',
+    submitCount: 0,
+    bestScore: 0,
+    eliminated: false,
+    history: [],
+    inventory: { ...FREE_MODE_DEFAULT_INVENTORY },
+    itemEffects: {},
+  };
+
+  room.players.push(botPlayer);
+  return botPlayer;
+}
+
+/** 获取 Bot 玩家 */
+export function getBotPlayer(room: FreeRoom): FreePlayer | undefined {
+  return room.players.find(p => p.playerId.startsWith('bot_'));
 }

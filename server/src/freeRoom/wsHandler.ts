@@ -2,8 +2,10 @@ import type { WebSocket } from 'ws';
 import {
   getFreeRoom, addPlayer, removePlayer, getPlayerList, canStart,
   startGame, evaluateFree, allPlayersEliminated, determineWinner,
-  getRanking, type FreeRoom, type FreePlayer,
+  getRanking, addBotPlayer, getBotPlayer, type FreeRoom, type FreePlayer,
 } from './store.js';
+import { isValidFreeItemId, FreeItemType } from './items.js';
+import { applyFreeItemEffect } from './itemEffects.js';
 
 function send(ws: WebSocket, msg: Record<string, unknown>): void {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -98,6 +100,7 @@ export function handleFreeRoomWs(ws: WebSocket, roomCode: string, params: URLSea
     roomName: room.roomName,
     guessLimit: room.guessLimit,
     hostId: room.hostId,
+    inventory: room.players.find(p => p.playerId === playerId)?.inventory || {},
   });
   broadcastPlayerList(room);
 
@@ -118,17 +121,30 @@ export function handleFreeRoomWs(ws: WebSocket, roomCode: string, params: URLSea
           send(ws, { type: 'error', message: '只有房主可以开始游戏' });
           return;
         }
-        if (!canStart(room)) {
-          send(ws, { type: 'error', message: '至少需要2名玩家' });
+
+        // Allow single player to start, will add bot automatically
+        if (room.players.length < 1) {
+          send(ws, { type: 'error', message: '房间为空' });
           return;
         }
+
+        // Add bot if only one player
+        if (room.players.length === 1) {
+          addBotPlayer(room);
+          console.log('[FreeRoom] added bot player to room=%s', roomCode);
+        }
+
         startGame(room);
         console.log('[FreeRoom] game started room=%s secret=%s limit=%d players=%d', roomCode, room.secret, room.guessLimit, room.players.length);
+
         broadcast(room, {
           type: 'game_start',
           guessLimit: room.guessLimit,
           players: getPlayerList(room),
         });
+
+        // Start bot behavior if bot exists
+        startBotBehavior(room, roomCode);
         break;
       }
 
@@ -184,6 +200,43 @@ export function handleFreeRoomWs(ws: WebSocket, roomCode: string, params: URLSea
         break;
       }
 
+      case 'use_item': {
+        if (room.state !== 'playing') {
+          send(ws, { type: 'error', message: '游戏未在进行中' });
+          return;
+        }
+
+        const itemId = String(msg.itemId || '');
+        if (!isValidFreeItemId(itemId)) {
+          send(ws, { type: 'error', message: '无效的道具ID' });
+          return;
+        }
+
+        const count = player.inventory[itemId] || 0;
+        if (count <= 0) {
+          send(ws, { type: 'error', message: '道具数量不足' });
+          return;
+        }
+
+        // Consume item
+        player.inventory[itemId] = count - 1;
+
+        // Apply effect
+        const effectData = applyFreeItemEffect(itemId as FreeItemType, room, player);
+
+        console.log('[FreeRoom] player %s used item %s in room %s', nickname, itemId, roomCode);
+
+        // Send effect to player
+        send(ws, {
+          type: 'item_used',
+          itemId,
+          effectData,
+          inventory: player.inventory,
+        });
+
+        break;
+      }
+
       case 'restart': {
         if (playerId !== room.hostId) {
           send(ws, { type: 'error', message: '只有房主可以重新开局' });
@@ -193,6 +246,20 @@ export function handleFreeRoomWs(ws: WebSocket, roomCode: string, params: URLSea
           send(ws, { type: 'error', message: '游戏还未结束' });
           return;
         }
+
+        // Remove bot from previous game if exists
+        const oldBot = getBotPlayer(room);
+        if (oldBot) {
+          removePlayer(room, oldBot.playerId);
+        }
+
+        // Add new bot if only one human player
+        const humanPlayers = room.players.filter(p => !p.playerId.startsWith('bot_'));
+        if (humanPlayers.length === 1) {
+          addBotPlayer(room);
+          console.log('[FreeRoom] added bot player for restart in room=%s', roomCode);
+        }
+
         startGame(room);
         console.log('[FreeRoom] game restarted room=%s secret=%s', roomCode, room.secret);
         broadcast(room, {
@@ -200,6 +267,9 @@ export function handleFreeRoomWs(ws: WebSocket, roomCode: string, params: URLSea
           guessLimit: room.guessLimit,
           players: getPlayerList(room),
         });
+
+        // Start bot behavior
+        startBotBehavior(room, roomCode);
         break;
       }
 
@@ -218,4 +288,83 @@ export function handleFreeRoomWs(ws: WebSocket, roomCode: string, params: URLSea
       broadcastPlayerList(room);
     }
   });
+}
+
+/**
+ * Start bot behavior - bot will randomly guess every 5 seconds
+ */
+function startBotBehavior(room: FreeRoom, roomCode: string): void {
+  const bot = getBotPlayer(room);
+  if (!bot) return;
+
+  const botInterval = setInterval(() => {
+    const currentRoom = getFreeRoom(roomCode);
+    if (!currentRoom) {
+      clearInterval(botInterval);
+      return;
+    }
+
+    // Stop if game is not playing
+    if (currentRoom.state !== 'playing') {
+      clearInterval(botInterval);
+      return;
+    }
+
+    // Stop if bot is eliminated
+    const currentBot = getBotPlayer(currentRoom);
+    if (!currentBot || currentBot.eliminated) {
+      clearInterval(botInterval);
+      return;
+    }
+
+    // Stop if bot reached guess limit
+    if (currentBot.submitCount >= currentRoom.guessLimit) {
+      currentBot.eliminated = true;
+      clearInterval(botInterval);
+      return;
+    }
+
+    // Generate random 4-digit guess
+    const guess = generateRandomGuess();
+    console.log('[FreeRoom] bot guessing: %s in room %s', guess, roomCode);
+
+    // Evaluate guess
+    const { a, b } = evaluateFree(currentRoom.secret!, guess);
+    currentBot.submitCount++;
+    currentBot.history.push({ guess, a, b });
+    const score = a + b;
+    if (score > currentBot.bestScore) currentBot.bestScore = score;
+    if (currentBot.submitCount >= currentRoom.guessLimit) {
+      currentBot.eliminated = true;
+    }
+
+    // Broadcast progress
+    broadcastProgress(currentRoom);
+
+    // Check win condition
+    if (a === 4) {
+      finishGame(currentRoom, currentBot.playerId, 'cracked');
+      clearInterval(botInterval);
+      return;
+    }
+
+    // Check if all players eliminated
+    if (allPlayersEliminated(currentRoom)) {
+      const { winnerId } = determineWinner(currentRoom);
+      finishGame(currentRoom, winnerId, 'all_eliminated');
+      clearInterval(botInterval);
+      return;
+    }
+  }, 5000); // Bot guesses every 5 seconds
+}
+
+/**
+ * Generate random 4-digit guess (digits can repeat)
+ */
+function generateRandomGuess(): string {
+  let guess = '';
+  for (let i = 0; i < 4; i++) {
+    guess += Math.floor(Math.random() * 10);
+  }
+  return guess;
 }

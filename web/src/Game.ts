@@ -12,6 +12,7 @@ import { GuessScene } from "@/scenes/GuessScene";
 import { LevelSelectScene } from "@/scenes/LevelSelectScene";
 import { CampaignScene } from "@/scenes/CampaignScene";
 import { LeaderboardScene } from "@/scenes/LeaderboardScene";
+import { SettingsScene } from "@/scenes/SettingsScene";
 import { RoomWaitScene } from "@/scenes/RoomWaitScene";
 import { RoomPlayScene } from "@/scenes/RoomPlayScene";
 import { RoomGuessPersonScene } from "@/scenes/RoomGuessPersonScene";
@@ -24,12 +25,15 @@ import { FreeGuessSettlement } from "@/scenes/FreeGuessSettlement";
 import type { GameMode } from "@/types";
 import type { RoomRole, RoomMsg, GpCandidateQuestion } from "@/room/client";
 import { getUserUUID } from "@/utils/uuid";
+import { getNickname } from "@/services/settingsManager";
 
 export class Game {
   private homeScene: HomeScene | null = null;
   private roomClient: RoomClient | null = null;
   private currentJoinUrl: string | undefined = undefined;
   private freeClient: FreeRoomClient | null = null;
+  private freeInventory: { [itemId: string]: number } = {};
+  private freeRoomIntentionalLeave = false;
 
   constructor(private app: Application) {}
 
@@ -77,9 +81,21 @@ export class Game {
       this.showFreeGuessHome();
       return;
     }
+    if (mode === "settings") {
+      this.showSettings();
+      return;
+    }
     this.app.stage.removeChildren();
     const guessScene = new GuessScene(this.app, { onBack: () => this.showHome() });
     this.app.stage.addChild(guessScene);
+  }
+
+  private showSettings(): void {
+    this.app.stage.removeChildren();
+    const settingsScene = new SettingsScene(this.app, {
+      onBack: () => this.showHome(),
+    });
+    this.app.stage.addChild(settingsScene);
   }
 
   private showRuleSelect(): void {
@@ -309,6 +325,7 @@ export class Game {
     turnStartAt: number,
     rule: import("@/room/client").RoomRule,
     myCode: string,
+    inventory?: { [itemId: string]: number },
     history?: { role: RoomRole; guess: string; result: string; timestamp: number }[]
   ): void {
     if (!this.roomClient) return;
@@ -322,6 +339,7 @@ export class Game {
       rule,
       myCode,
       joinUrl: this.currentJoinUrl,
+      inventory,
       onBack: () => this.leaveRoom(),
       history,
     });
@@ -382,16 +400,40 @@ export class Game {
 
   private enterFreeRoom(roomCode: string, isHost: boolean, password?: string): void {
     const uuid = getUserUUID();
-    const nickname = `玩家${uuid.slice(0, 4)}`;
+    const nickname = getNickname();
     const playerId = uuid;
 
     this.freeClient = new FreeRoomClient();
+    this.freeRoomIntentionalLeave = false;
+
+    // Listen for unexpected disconnections
+    this.freeClient.onClose(() => {
+      // Only show error if it was not an intentional leave
+      if (!this.freeRoomIntentionalLeave) {
+        console.warn("[Game] Free room connection closed unexpectedly");
+        this._showErrorAndReturnHome("连接已断开");
+      }
+    });
+
     this.freeClient.connect(roomCode, nickname, playerId, password).then(
       () => {
         let lobbyUnsub: (() => void) | null = null;
         lobbyUnsub = this.freeClient!.onMessage((msg: FreeRoomMsg) => {
+          // Handle error messages from server
+          if (msg.type === "error") {
+            console.error("[Game] Free room error:", msg.message);
+            lobbyUnsub?.();
+            this.leaveFreeRoom();
+            this._showErrorAndReturnHome(msg.message ?? "房间错误");
+            return;
+          }
+
           if (msg.type === "joined") {
             lobbyUnsub?.();
+            // Save inventory
+            if (msg.inventory) {
+              this.freeInventory = msg.inventory;
+            }
             this.showFreeGuessLobby(
               roomCode,
               msg.roomName ?? `房间 ${roomCode}`,
@@ -401,18 +443,42 @@ export class Game {
           }
         });
       },
-      () => {
-        this.app.stage.removeChildren();
-        const err = new Text({
-          text: "连接房间失败",
-          style: { fontFamily: "system-ui", fontSize: 18, fill: 0xff6644 },
-        });
-        err.anchor.set(0.5);
-        err.x = this.app.screen.width / 2;
-        err.y = this.app.screen.height / 2;
-        this.app.stage.addChild(err);
+      (error) => {
+        console.error("[Game] Free room connection failed:", error);
+        this._showErrorAndReturnHome("连接房间失败");
       }
     );
+  }
+
+  private _showErrorAndReturnHome(errorMsg: string): void {
+    this.app.stage.removeChildren();
+
+    const container = new Container();
+
+    const err = new Text({
+      text: errorMsg,
+      style: { fontFamily: "system-ui", fontSize: 18, fill: 0xff6644, fontWeight: "bold" },
+    });
+    err.anchor.set(0.5);
+    err.x = this.app.screen.width / 2;
+    err.y = this.app.screen.height / 2 - 30;
+    container.addChild(err);
+
+    const hint = new Text({
+      text: "2秒后返回首页...",
+      style: { fontFamily: "system-ui", fontSize: 14, fill: 0x888888 },
+    });
+    hint.anchor.set(0.5);
+    hint.x = this.app.screen.width / 2;
+    hint.y = this.app.screen.height / 2 + 10;
+    container.addChild(hint);
+
+    this.app.stage.addChild(container);
+
+    // Auto return to home after 2 seconds
+    setTimeout(() => {
+      this.showHome();
+    }, 2000);
   }
 
   private showFreeGuessLobby(roomCode: string, roomName: string, guessLimit: number, isHost: boolean): void {
@@ -442,6 +508,7 @@ export class Game {
       client: this.freeClient!,
       guessLimit,
       players,
+      inventory: this.freeInventory,
       onBack: () => this.leaveFreeRoom(),
       onGameOver: (msg) => this.showFreeGuessSettlement(msg, isHost),
     });
@@ -471,6 +538,7 @@ export class Game {
   }
 
   private leaveFreeRoom(): void {
+    this.freeRoomIntentionalLeave = true;
     this.freeClient?.close();
     this.freeClient = null;
     this.app.stage.removeChildren();

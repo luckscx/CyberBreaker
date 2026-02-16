@@ -58,6 +58,7 @@ export class GuessInput extends Container {
   private confirmBtn: KeyButton;
   private _enabled = true;
   private _totalHeight = 0;
+  private _totalWidth = 0;
   private _eliminatedDigits: string[] = [];
   private onGuessChange?: (guess: string) => void;
 
@@ -66,6 +67,9 @@ export class GuessInput extends Container {
 
   /** 组件总高度（从 slot 顶部到操作按钮底部） */
   get totalHeight(): number { return this._totalHeight; }
+
+  /** 组件总宽度（键盘宽度） */
+  get totalWidth(): number { return this._totalWidth; }
 
   constructor(opts: GuessInputOptions) {
     super();
@@ -91,6 +95,7 @@ export class GuessInput extends Container {
     const KS = this.keySize;
     const KG = this.keyGap;
     const keypadW = COLS * KS + (COLS - 1) * KG;
+    this._totalWidth = keypadW;
     // 让 4 个槽总宽与键盘一致，横向对齐
     const SS = Math.max(36, (keypadW - 3 * SG) / 4);
 
@@ -199,7 +204,13 @@ export class GuessInput extends Container {
     this._refreshSlots();
   }
 
-  /** 启用/禁用所有交互 */
+  /** 设置是否允许重复数字（如等待场景规则切换后） */
+  setAllowRepeat(allow: boolean): void {
+    this.allowRepeat = allow;
+    this._refreshSlots();
+  }
+
+  /** 启用/禁用整个组件（全部灰、不可点） */
   setEnabled(enabled: boolean): void {
     this._enabled = enabled;
     this.digitButtons.forEach((b) => {
@@ -207,12 +218,13 @@ export class GuessInput extends Container {
       b.alpha = enabled ? 1 : 0.4;
     });
     this.backspaceBtn.eventMode = enabled ? "static" : "none";
-    this.backspaceBtn.alpha = enabled ? 1 : 0.4;
     this.confirmBtn.eventMode = enabled ? "static" : "none";
+    this.backspaceBtn.alpha = enabled ? 1 : 0.4;
     this.confirmBtn.alpha = enabled ? 1 : 0.4;
+    if (enabled) this._refreshSlots(); // 重新应用各键的 disabled 状态与样式
   }
 
-  /** 隐藏已选数字 + 排除数字 */
+  /** 更新槽显示 + 各键 disabled：退格无输入禁用手势；未满 4 位确认禁用；不允许重复时已选数字键禁用（灰色+闷音） */
   private _refreshSlots(): void {
     if (this.slotContainer) {
       const digits = this._guess.split("");
@@ -221,11 +233,15 @@ export class GuessInput extends Container {
         if (t) t.text = digits[i] ?? "?";
       }
     }
+    this.backspaceBtn.setDisabled(this._guess.length === 0);
+    this.confirmBtn.setDisabled(this._guess.length < 4);
+
     this.digitButtons.forEach((btn, i) => {
       const d = String(DIGITS[i]);
-      const hideByGuess = !this.allowRepeat && this._guess.includes(d);
-      const hideByEliminated = this._eliminatedDigits.includes(d);
-      btn.visible = !hideByGuess && !hideByEliminated;
+      const eliminated = this._eliminatedDigits.includes(d);
+      const alreadyInGuess = !this.allowRepeat && this._guess.includes(d);
+      btn.visible = !eliminated;
+      btn.setDisabled(alreadyInGuess);
     });
   }
 

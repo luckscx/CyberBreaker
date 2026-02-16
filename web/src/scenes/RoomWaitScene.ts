@@ -1,7 +1,7 @@
 import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
 import { Button } from "@/components/Button";
-import { KeyButton } from "@/components/KeyButton";
+import { GuessInput } from "@/components/GuessInput";
 import { Background } from "@/components/Background";
 import { MusicToggle } from "@/components/MusicToggle";
 import { BackButton } from "@/components/BackButton";
@@ -9,22 +9,13 @@ import { RoomClient, type RoomRole } from "@/room/client";
 import type { RoomRule } from "@/room/client";
 import { isValidGuessForRule } from "@/logic/guess";
 
-const SLOT_SIZE = 50;
-const SLOT_GAP = 8;
-const KEY_SIZE = 64;
-const KEY_GAP = 8;
-const KEYPAD_COLS = 3;
-const KEYPAD_ROWS = 4;
-const KEYPAD_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
-const RADIUS = 8;
-
 export interface RoomWaitSceneOptions {
   app: Application;
   client: RoomClient;
   roomId: string;
   role: RoomRole;
   joinUrl?: string;
-  onGameStart: (turn: RoomRole, turnStartAt: number, rule: RoomRule, myCode: string, history?: { role: RoomRole; guess: string; result: string; timestamp: number }[]) => void;
+  onGameStart: (turn: RoomRole, turnStartAt: number, rule: RoomRule, myCode: string, inventory?: { [itemId: string]: number }, history?: { role: RoomRole; guess: string; result: string; timestamp: number }[]) => void;
   onBack: () => void;
 }
 
@@ -34,9 +25,7 @@ const CIRCLE_GAP = 40;
 export class RoomWaitScene extends Container {
   private statusText: Text;
   private codeContainer: Container;
-  private codeSlots: Container;
-  private codeValue = "";
-  private digitButtons: KeyButton[] = [];
+  private guessInput!: GuessInput;
   private client: RoomClient;
   private unsub: (() => void) | null = null;
   private myCircle: Graphics;
@@ -52,6 +41,7 @@ export class RoomWaitScene extends Container {
   private rule: RoomRule = "standard";
   private ruleLabel: Text | null = null;
   private myCode = ""; // 保存自己设置的密码
+  private inventory: { [itemId: string]: number } = {};
 
   constructor(private opts: RoomWaitSceneOptions) {
     super();
@@ -159,54 +149,14 @@ export class RoomWaitScene extends Container {
     this.ruleLabel.y = 22;
     this.codeContainer.addChild(this.ruleLabel);
 
-    this.codeSlots = this._buildCodeSlots();
-    this.codeSlots.x = cx - (4 * SLOT_SIZE + 3 * SLOT_GAP) / 2 + SLOT_SIZE / 2 + SLOT_GAP / 2;
-    this.codeSlots.y = 52;
-    this.codeContainer.addChild(this.codeSlots);
-
-    const keypadW = KEYPAD_COLS * KEY_SIZE + (KEYPAD_COLS - 1) * KEY_GAP;
-    KEYPAD_DIGITS.forEach((digit, i) => {
-      const row = Math.floor(i / KEYPAD_COLS);
-      const col = i % KEYPAD_COLS;
-      const btn = new KeyButton({
-        label: String(digit),
-        width: KEY_SIZE,
-        height: KEY_SIZE,
-        fontSize: 22,
-        onClick: () => {
-          this._addDigit(digit);
-        },
-      });
-      btn.x = cx - keypadW / 2 + KEY_SIZE / 2 + col * (KEY_SIZE + KEY_GAP);
-      btn.y = 98 + row * (KEY_SIZE + KEY_GAP);
-      this.codeContainer.addChild(btn);
-      this.digitButtons.push(btn);
+    this.guessInput = new GuessInput({
+      allowRepeat: this.rule === "position_only",
+      onSubmit: (code) => this._submitCode(code),
     });
-
-    const actionY = 90 + KEYPAD_ROWS * (KEY_SIZE + KEY_GAP) + 12;
-    const backspaceBtn = new Button({
-      label: "⌫ 退格",
-      width: 90,
-      fontSize: 14,
-      onClick: () => {
-        this._backspace();
-      },
-    });
-    backspaceBtn.x = cx - 65;
-    backspaceBtn.y = actionY;
-    this.codeContainer.addChild(backspaceBtn);
-
-    const confirmBtn = new Button({
-      label: "✓ 确认",
-      width: 90,
-      fontSize: 14,
-      onClick: () => {
-        this._submitCode();
-      },
-    });
-    confirmBtn.x = cx + 65;
-    confirmBtn.y = actionY;
-    this.codeContainer.addChild(confirmBtn);
+    this.codeContainer.addChild(this.guessInput);
+    this.guessInput.pivot.x = this.guessInput.width / 2;
+    this.guessInput.x = cx;
+    this.guessInput.y = 48;
 
     this._updateRuleLabel();
 
@@ -303,11 +253,17 @@ export class RoomWaitScene extends Container {
     isReconnect?: boolean;
     history?: { role: RoomRole; guess: string; result: string; timestamp: number }[];
     state?: string;
+    inventory?: { [itemId: string]: number };
   }): void {
     if (msg.type === "room_joined") {
       if (msg.rule !== undefined) {
         this.rule = msg.rule;
         this._updateRuleLabel();
+        this.guessInput?.setAllowRepeat(this.rule === "position_only");
+      }
+      if (msg.inventory !== undefined) {
+        this.inventory = msg.inventory;
+        console.log("[RoomWaitScene] received inventory:", this.inventory);
       }
       if (msg.hostCodeSet !== undefined && msg.guestCodeSet !== undefined) {
         this._applyCodeState(msg.hostCodeSet, msg.guestCodeSet);
@@ -319,7 +275,7 @@ export class RoomWaitScene extends Container {
         this.statusText.text = "正在重连游戏...";
         this.statusText.style.fill = 0x00ffcc;
         setTimeout(() => {
-          this.opts.onGameStart(msg.turn!, msg.turnStartAt ?? Date.now(), msg.rule ?? this.rule, this.myCode, msg.history);
+          this.opts.onGameStart(msg.turn!, msg.turnStartAt ?? Date.now(), msg.rule ?? this.rule, this.myCode, this.inventory, msg.history);
         }, 500); // 短暂延迟，让用户看到重连提示
       } else if (msg.isReconnect && this.rule === "guess_person") {
         this.statusText.text = "正在重连...";
@@ -364,7 +320,7 @@ export class RoomWaitScene extends Container {
       this.codeContainer.visible = false;
     }
     if (msg.type === "game_start" && msg.turn !== undefined) {
-      this.opts.onGameStart(msg.turn, msg.turnStartAt ?? Date.now(), msg.rule ?? this.rule, this.myCode, msg.history);
+      this.opts.onGameStart(msg.turn, msg.turnStartAt ?? Date.now(), msg.rule ?? this.rule, this.myCode, this.inventory, msg.history);
     }
     if (msg.type === "error") {
       this.statusText.text = msg.error ?? "错误";
@@ -436,101 +392,8 @@ export class RoomWaitScene extends Container {
     return g;
   }
 
-  private _buildCodeSlots(): Container {
-    const c = new Container();
-    for (let i = 0; i < 4; i++) {
-      // Glow effect
-      const glow = new Graphics();
-      glow.roundRect(-SLOT_SIZE / 2 - 2, -SLOT_SIZE / 2 - 2, SLOT_SIZE + 4, SLOT_SIZE + 4, RADIUS + 2).fill({
-        color: 0x00ffcc,
-        alpha: 0,
-      });
-      glow.x = i * (SLOT_SIZE + SLOT_GAP);
-      glow.name = `glow-${i}`;
-      c.addChild(glow);
-
-      const box = new Graphics();
-      box.roundRect(-SLOT_SIZE / 2, -SLOT_SIZE / 2, SLOT_SIZE, SLOT_SIZE, RADIUS).fill({ color: 0x1a2332 });
-      box.roundRect(-SLOT_SIZE / 2, -SLOT_SIZE / 2, SLOT_SIZE, SLOT_SIZE, RADIUS).stroke({
-        width: 2,
-        color: 0x334455,
-        alpha: 0.5,
-      });
-      box.x = i * (SLOT_SIZE + SLOT_GAP);
-      box.name = `box-${i}`;
-      c.addChild(box);
-
-      const text = new Text({
-        text: "?",
-        style: {
-          fontFamily: "system-ui",
-          fontSize: 20,
-          fill: 0x00ffcc,
-          dropShadow: {
-            color: 0x00ffcc,
-            blur: 4,
-            alpha: 0.3,
-            distance: 0,
-          },
-        },
-      });
-      text.anchor.set(0.5);
-      text.x = i * (SLOT_SIZE + SLOT_GAP);
-      text.name = `slot-${i}`;
-      c.addChild(text);
-    }
-    return c;
-  }
-
-  private _refreshSlots(): void {
-    const digits = this.codeValue.split("");
-    for (let i = 0; i < 4; i++) {
-      const t = this.codeSlots.getChildByName(`slot-${i}`) as Text;
-      const box = this.codeSlots.getChildByName(`box-${i}`) as Graphics;
-      const glow = this.codeSlots.getChildByName(`glow-${i}`) as Graphics;
-
-      if (t) t.text = digits[i] ?? "?";
-
-      // Highlight active slot
-      if (box) {
-        box.clear();
-        const isActive = i === digits.length && digits.length < 4;
-        const fillColor = isActive ? 0x1e2a3c : 0x1a2332;
-        const strokeColor = isActive ? 0x00ffcc : 0x334455;
-
-        box.roundRect(-SLOT_SIZE / 2, -SLOT_SIZE / 2, SLOT_SIZE, SLOT_SIZE, RADIUS).fill({ color: fillColor });
-        box.roundRect(-SLOT_SIZE / 2, -SLOT_SIZE / 2, SLOT_SIZE, SLOT_SIZE, RADIUS).stroke({
-          width: 2,
-          color: strokeColor,
-          alpha: isActive ? 0.8 : 0.3,
-        });
-
-        if (glow) {
-          glow.alpha = isActive ? 0.3 : 0;
-        }
-      }
-    }
-    this.digitButtons.forEach((btn, i) => {
-      if (this.rule === "position_only") btn.visible = true;
-      else btn.visible = !this.codeValue.includes(String(KEYPAD_DIGITS[i]));
-    });
-  }
-
-  private _addDigit(d: number): void {
-    if (this.codeValue.length >= 4) return;
-    if (this.rule === "standard" && this.codeValue.includes(String(d))) return;
-    this.codeValue += d;
-    this._refreshSlots();
-  }
-
-  private _backspace(): void {
-    if (this.codeValue.length === 0) return;
-    this.codeValue = this.codeValue.slice(0, -1);
-    this._refreshSlots();
-  }
-
-  private _submitCode(): void {
-    if (!isValidGuessForRule(this.codeValue, this.rule)) {
+  private _submitCode(code: string): void {
+    if (!isValidGuessForRule(code, this.rule)) {
       this.statusText.text = this.rule === "position_only" ? "请输入 4 位数字" : "请输入 4 位不重复数字";
       this.statusText.style.fill = 0xffaa44;
       return;
@@ -541,7 +404,8 @@ export class RoomWaitScene extends Container {
       return;
     }
     this.statusText.style.fill = 0xaaaaaa;
-    this.myCode = this.codeValue; // 保存密码
-    this.client.setCode(this.codeValue);
+    this.myCode = code;
+    this.client.setCode(code);
+    this.guessInput.clear();
   }
 }
