@@ -5,6 +5,8 @@ import { PowerUpButton } from "../components/PowerUpButton";
 import { Background } from "../components/Background";
 import { MusicToggle } from "../components/MusicToggle";
 import { BackButton } from "../components/BackButton";
+import { BackpackButton } from "../components/BackpackButton";
+import { BackpackModal } from "../components/BackpackModal";
 import { LevelConfig, LevelGameState, PowerUpType } from "../types/level";
 import { getLevelById } from "../data/levels";
 import { getPowerUp } from "../data/powerUps";
@@ -35,8 +37,10 @@ export class CampaignScene extends Container {
   private guessesText: Text | null = null;
   private powerUpButtons: Map<PowerUpType, PowerUpButton> = new Map();
   private effectHintText: Text;
+  private backpackButton: BackpackButton | null = null;
+  private backpackModal: BackpackModal | null = null;
 
-  private timerId: ReturnType<typeof setInterval> | null = null;
+  private timerId: ReturnType<typeof setInterval> | null = 0;
   private startTime: number = 0;
 
   constructor(
@@ -114,6 +118,16 @@ export class CampaignScene extends Container {
       y: 16,
     });
     this.addChild(musicToggle);
+
+    // 背包按钮（音乐按钮左侧）
+    const totalItems = Object.values(this.gameState.availablePowerUps).reduce((sum, count) => sum + count, 0);
+    this.backpackButton = new BackpackButton({
+      x: width - 16 - toggleSize * 2 - 10,
+      y: 16,
+      onClick: () => this._showBackpack(),
+    });
+    this.backpackButton.updateCount(totalItems);
+    this.addChild(this.backpackButton);
 
     // 关卡标题（居中，向下移动避免与按钮重叠）
     const title = new Text({
@@ -211,7 +225,7 @@ export class CampaignScene extends Container {
     this.addChild(this.slotsContainer);
 
     // GuessInput 键盘（仅键盘，槽由上方 slotsContainer 负责）
-    const keypadY = 160 + slotHeight + 12;
+    const keypadY = 160 + this.slotsContainer.height + 60;
     this.guessInput = new GuessInput({
       showSlots: false,
       slotSize: 60,
@@ -260,8 +274,8 @@ export class CampaignScene extends Container {
     this.historyText.position.set(centerX, historyY);
     this.addChild(this.historyText);
 
-    // 道具栏（底部居中）
-    this._buildPowerUps(centerX, height - 80);
+    // 道具栏移除 - 现在使用背包按钮
+    // this._buildPowerUps(centerX, height - 80);
   }
 
   private _buildSlots(): void {
@@ -377,7 +391,17 @@ export class CampaignScene extends Container {
     this.gameState = PowerUpEffects.apply(this.gameState, type);
     this.gameState.availablePowerUps[type] = count - 1;
 
-    this.powerUpButtons.get(type)?.updateCount(count - 1);
+    // 更新背包按钮数量
+    const totalItems = Object.values(this.gameState.availablePowerUps).reduce((sum, c) => sum + c, 0);
+    if (this.backpackButton) {
+      this.backpackButton.updateCount(totalItems);
+    }
+
+    // 更新背包模态框中的数量（如果打开）
+    if (this.backpackModal) {
+      this.backpackModal.updateItemCount(type, count - 1);
+    }
+
     this._updateEffectHint();
     this._buildSlots();
 
@@ -391,7 +415,7 @@ export class CampaignScene extends Container {
       this.historyText,
       this.timerText,
       this.guessesText,
-      ...Array.from(this.powerUpButtons.values()),
+      this.backpackButton,
     ].filter(Boolean);
 
     // 找到并移除键盘和其他临时元素
@@ -399,6 +423,39 @@ export class CampaignScene extends Container {
     toRemove.forEach((c) => this.removeChild(c));
 
     this._buildUI();
+  }
+
+  private _showBackpack(): void {
+    if (this.backpackModal || this.gameState.gameEnded) return;
+
+    // 转换道具数据格式
+    const items = this.levelConfig.availablePowerUps.map(type => {
+      const powerUpData = getPowerUp(type);
+      return {
+        id: type,
+        icon: powerUpData.icon,
+        name: powerUpData.name,
+        description: powerUpData.description,
+        count: this.gameState.availablePowerUps[type] || 0,
+      };
+    });
+
+    this.backpackModal = new BackpackModal({
+      app: this.app,
+      items,
+      disabled: this.gameState.gameEnded,
+      onUseItem: (itemId) => this._usePowerUp(itemId as PowerUpType),
+      onClose: () => this._hideBackpack(),
+    });
+    this.addChild(this.backpackModal);
+  }
+
+  private _hideBackpack(): void {
+    if (this.backpackModal) {
+      this.removeChild(this.backpackModal);
+      this.backpackModal.destroy();
+      this.backpackModal = null;
+    }
   }
 
   private _updateEffectHint(): void {
