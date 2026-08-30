@@ -30,6 +30,9 @@ rsync -avz --progress \
   --exclude '.git' \
   --exclude '.claude' \
   --exclude '.cursor' \
+  --exclude '.codebuddy' \
+  --exclude '.dev_pids' \
+  --exclude '*.log' \
   --exclude 'server/dist' \
   --exclude 'web/dist' \
   -e "ssh -p ${PORT}" \
@@ -50,9 +53,15 @@ ssh -p ${PORT} ${SERVER} "cd ${REMOTE_PATH}/web && /root/.nvm/versions/node/v22.
 echo -e "${GREEN}✓ Web 构建完成${NC}"
 echo ""
 
-# 4. 重启 Backend
+# 4. 重启 Backend（进程不存在时自动改为启动）
 echo -e "${YELLOW}[4/5] 重启 Backend 服务...${NC}"
-ssh -p ${PORT} ${SERVER} "/usr/local/bin/pm2 restart cyberbreaker-server"
+ssh -p ${PORT} ${SERVER} "if /usr/local/bin/pm2 describe cyberbreaker-server >/dev/null 2>&1; then
+  /usr/local/bin/pm2 restart cyberbreaker-server
+else
+  echo '进程不存在，首次启动...'
+  cd ${REMOTE_PATH}/server && /usr/local/bin/pm2 start ecosystem.config.cjs
+  /usr/local/bin/pm2 save
+fi"
 echo -e "${GREEN}✓ Backend 重启完成${NC}"
 echo ""
 

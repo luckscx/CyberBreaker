@@ -43,6 +43,9 @@ rsync -az \
   --exclude '.git' \
   --exclude '.claude' \
   --exclude '.cursor' \
+  --exclude '.codebuddy' \
+  --exclude '.dev_pids' \
+  --exclude '*.log' \
   -e "ssh -p ${PORT}" \
   "${LOCAL_PATH}/" "${SERVER}:${REMOTE_PATH}/"
 echo -e "${GREEN}✓ 完成${NC}"
@@ -64,9 +67,15 @@ else
   echo -e "${YELLOW}[3/4] 跳过 Web 构建（无变化）${NC}"
 fi
 
-# 3. 重启服务
+# 3. 重启服务（进程不存在时自动改为启动）
 echo -e "${YELLOW}[4/4] 重启服务...${NC}"
-ssh -p ${PORT} ${SERVER} "/usr/local/bin/pm2 restart cyberbreaker-server"
+ssh -p ${PORT} ${SERVER} "if /usr/local/bin/pm2 describe cyberbreaker-server >/dev/null 2>&1; then
+  /usr/local/bin/pm2 restart cyberbreaker-server
+else
+  echo '进程不存在，首次启动...'
+  cd ${REMOTE_PATH}/server && /usr/local/bin/pm2 start ecosystem.config.cjs
+  /usr/local/bin/pm2 save
+fi"
 echo -e "${GREEN}✓ 完成${NC}"
 
 echo ""
