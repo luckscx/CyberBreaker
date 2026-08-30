@@ -4,15 +4,17 @@ import { Button } from "@/components/Button";
 import { MusicToggle } from "@/components/MusicToggle";
 import type { GameMode } from "@/types";
 
-const TITLE_Y = 0.22;
+const TITLE_Y = 0.21;
 const BUTTON_GAP = 15;
-const BUTTON_START_Y = 0.40;
+const BUTTON_START_Y = 0.41;
 
 export interface HomeSceneOptions {
   onModeSelect: (mode: GameMode) => void;
 }
 
 export class HomeScene extends Container {
+  private _tickers: Array<() => void> = [];
+
   constructor(
     private app: Application,
     private opts: HomeSceneOptions
@@ -22,6 +24,17 @@ export class HomeScene extends Container {
     this.addChild(this._buildTitle());
     this._addButtons();
     this._addMusicButton();
+  }
+
+  override destroy(options?: Parameters<Container["destroy"]>[0]): void {
+    this._tickers.forEach((fn) => this.app.ticker.remove(fn));
+    this._tickers = [];
+    super.destroy(options);
+  }
+
+  private _tick(fn: () => void): void {
+    this._tickers.push(fn);
+    this.app.ticker.add(fn);
   }
 
   private _addMusicButton(): void {
@@ -87,14 +100,15 @@ export class HomeScene extends Container {
     const particleContainer = new Container();
     this.addChildAt(particleContainer, 1);
 
-    const particles: Array<{ g: Graphics; vx: number; vy: number; life: number }> = [];
+    const particles: Array<{ g: Graphics; vx: number; vy: number; life: number; size: number }> = [];
 
     // 减少粒子数量以提升性能
     for (let i = 0; i < 20; i++) {
       const g = new Graphics();
       const size = Math.random() * 2 + 1;
+      const isAccent = Math.random() < 0.3;
       g.circle(0, 0, size).fill({
-        color: 0x00ffcc,
+        color: isAccent ? 0xff4dcc : 0x00ffcc,
         alpha: Math.random() * 0.3 + 0.1,
       });
       g.x = Math.random() * this.app.screen.width;
@@ -105,16 +119,17 @@ export class HomeScene extends Container {
         g,
         vx: (Math.random() - 0.5) * 0.5,
         vy: (Math.random() - 0.5) * 0.5,
-        life: Math.random(),
+        life: Math.random() * Math.PI * 2,
+        size,
       });
     }
 
-    this.app.ticker.add(() => {
+    this._tick(() => {
       particles.forEach((p) => {
         p.g.x += p.vx;
         p.g.y += p.vy;
         p.life += 0.01;
-        p.g.alpha = 0.3 * Math.sin(p.life);
+        p.g.alpha = (0.12 + 0.24 * (Math.sin(p.life) * 0.5 + 0.5)) * (p.size / 2);
 
         if (p.g.x < 0) p.g.x = this.app.screen.width;
         if (p.g.x > this.app.screen.width) p.g.x = 0;
@@ -126,21 +141,27 @@ export class HomeScene extends Container {
 
   private _buildTitle(): Container {
     const container = new Container();
+    const w = this.app.screen.width;
 
-    // Animated glow circle - 缩小尺寸
+    // Animated glow circle
     const glowCircle = new Graphics();
-    glowCircle.circle(0, 0, 60).fill({
+    glowCircle.circle(0, 0, 62).fill({
       color: 0x00ffcc,
       alpha: 0.1,
     });
     container.addChild(glowCircle);
 
-    // Gradient background for title - 缩小尺寸
+    // 外层光环
+    const halo = new Graphics();
+    halo.circle(0, 0, 92).stroke({ width: 2, color: 0x00ffcc, alpha: 0.14 });
+    halo.circle(0, 0, 118).stroke({ width: 1, color: 0x00ffcc, alpha: 0.07 });
+    container.addChild(halo);
+
+    // Gradient background for title
     const gradientBg = new Graphics();
     const gradWidth = 240;
     const gradHeight = 50;
 
-    // Create a simple gradient by drawing multiple overlapping rectangles
     for (let i = 0; i < 20; i++) {
       const ratio = i / 20;
       const color = this._interpolateColor(0x00ffcc, 0x0088ff, ratio);
@@ -153,8 +174,8 @@ export class HomeScene extends Container {
     gradientBg.alpha = 0.3;
     container.addChild(gradientBg);
 
-    // Title text - 缩小字号
-    const t = new Text({
+    // 底层光晕文字（霓虹外发光）
+    const glowText = new Text({
       text: "赛博密码",
       style: {
         fontFamily: "system-ui, sans-serif",
@@ -163,16 +184,31 @@ export class HomeScene extends Container {
         fontWeight: "bold",
         dropShadow: {
           color: 0x00ffcc,
-          blur: 10,
-          alpha: 0.5,
+          blur: 18,
+          alpha: 0.9,
           distance: 0,
         },
+      },
+    });
+    glowText.anchor.set(0.5);
+    glowText.alpha = 0.55;
+    container.addChild(glowText);
+
+    // 顶层清晰文字
+    const t = new Text({
+      text: "赛博密码",
+      style: {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: 40,
+        fill: 0xeafffb,
+        fontWeight: "bold",
+        stroke: { color: 0x00ffcc, width: 2 },
       },
     });
     t.anchor.set(0.5);
     container.addChild(t);
 
-    // Subtitle - 缩小字号
+    // Subtitle
     const subtitle = new Text({
       text: "CYBER BREAKER",
       style: {
@@ -183,20 +219,43 @@ export class HomeScene extends Container {
       },
     });
     subtitle.anchor.set(0.5);
-    subtitle.y = 30;
+    subtitle.y = 32;
     subtitle.alpha = 0.6;
     container.addChild(subtitle);
 
-    container.x = this.app.screen.width / 2;
+    // 两侧装饰线
+    const decoY = -6;
+    const decoGap = 150;
+    const decoLen = 46;
+    const leftDeco = new Graphics();
+    leftDeco.moveTo(-decoGap, decoY);
+    leftDeco.lineTo(-decoGap + decoLen, decoY);
+    leftDeco.moveTo(-decoGap, decoY - 3);
+    leftDeco.lineTo(-decoGap + 10, decoY - 3);
+    leftDeco.stroke({ width: 2, color: 0x00ffcc, alpha: 0.5 });
+    container.addChild(leftDeco);
+
+    const rightDeco = new Graphics();
+    rightDeco.moveTo(decoGap, decoY);
+    rightDeco.lineTo(decoGap - decoLen, decoY);
+    rightDeco.moveTo(decoGap, decoY - 3);
+    rightDeco.lineTo(decoGap - 10, decoY - 3);
+    rightDeco.stroke({ width: 2, color: 0x00ffcc, alpha: 0.5 });
+    container.addChild(rightDeco);
+
+    container.x = w / 2;
     container.y = this.app.screen.height * TITLE_Y;
 
     // Pulse animation
     let time = 0;
-    this.app.ticker.add(() => {
+    this._tick(() => {
       time += 0.05;
       const scale = 1 + Math.sin(time) * 0.15;
       glowCircle.scale.set(scale);
       glowCircle.alpha = 0.05 + Math.sin(time) * 0.05;
+      halo.scale.set(1 + Math.sin(time * 0.7) * 0.04);
+      halo.alpha = 0.6 + Math.sin(time * 0.7) * 0.4;
+      glowText.alpha = 0.4 + Math.sin(time) * 0.18;
 
       // Animate gradient background
       gradientBg.rotation = Math.sin(time * 0.5) * 0.1;
@@ -226,49 +285,52 @@ export class HomeScene extends Container {
     const baseY = this.app.screen.height * BUTTON_START_Y;
     const buttonWidth = Math.min(240, this.app.screen.width - 60);
 
-    const single = new Button({
-      label: "🎓 教学模式",
-      width: buttonWidth,
-      onClick: () => this.opts.onModeSelect("single"),
-    });
-    single.x = cx;
-    single.y = baseY;
-    this.addChild(single);
+    const defs: Array<{ label: string; mode: GameMode }> = [
+      { label: "🎓 教学模式", mode: "single" },
+      { label: "🎯 关卡模式", mode: "campaign" },
+      { label: "⚔️ 联机对战", mode: "room" },
+      { label: "🎲 多人房间", mode: "free_room" },
+      { label: "🏆 排行榜", mode: "leaderboard" },
+    ];
 
-    const campaign = new Button({
-      label: "🎯 关卡模式",
-      width: buttonWidth,
-      onClick: () => this.opts.onModeSelect("campaign"),
-    });
-    campaign.x = cx;
-    campaign.y = baseY + single.height + BUTTON_GAP;
-    this.addChild(campaign);
+    const buttons: Button[] = [];
 
-    const room = new Button({
-      label: "⚔️ 联机对战",
-      width: buttonWidth,
-      onClick: () => this.opts.onModeSelect("room"),
+    defs.forEach((def, i) => {
+      const btn = new Button({
+        label: def.label,
+        width: buttonWidth,
+        onClick: () => this.opts.onModeSelect(def.mode),
+      });
+      btn.x = cx;
+      btn.y = baseY + (btn.height + BUTTON_GAP) * i;
+      btn.alpha = 0;
+      btn.y += 26;
+      this.addChild(btn);
+      buttons.push(btn);
     });
-    room.x = cx;
-    room.y = baseY + single.height * 2 + BUTTON_GAP * 2;
-    this.addChild(room);
 
-    const freeRoom = new Button({
-      label: "🎲 多人房间",
-      width: buttonWidth,
-      onClick: () => this.opts.onModeSelect("free_room"),
-    });
-    freeRoom.x = cx;
-    freeRoom.y = baseY + single.height * 3 + BUTTON_GAP * 3;
-    this.addChild(freeRoom);
-
-    const leaderboard = new Button({
-      label: "🏆 排行榜",
-      width: buttonWidth,
-      onClick: () => this.opts.onModeSelect("leaderboard"),
-    });
-    leaderboard.x = cx;
-    leaderboard.y = baseY + single.height * 4 + BUTTON_GAP * 4;
-    this.addChild(leaderboard);
+    // 入场动画：依次滑入
+    const startTime = Date.now();
+    const stagger = 90;
+    const duration = 320;
+    const onFrame = () => {
+      const elapsed = Date.now() - startTime;
+      buttons.forEach((btn, i) => {
+        const local = elapsed - i * stagger;
+        if (local <= 0) return;
+        const progress = Math.min(local / duration, 1);
+        const eased = progress < 0.5
+          ? 2 * progress * progress
+          : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+        btn.alpha = eased;
+        btn.y = baseY + (btn.height + BUTTON_GAP) * i + (1 - eased) * 26;
+      });
+      if (elapsed > stagger * buttons.length + duration) {
+        // 动画完成，自我移除
+        this.app.ticker.remove(onFrame);
+        this._tickers = this._tickers.filter((fn) => fn !== onFrame);
+      }
+    };
+    this._tick(onFrame);
   }
 }

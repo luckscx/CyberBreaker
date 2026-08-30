@@ -237,7 +237,7 @@ export class CampaignScene extends Container {
       allowRepeat: false,
       confirmLabel: "✓",
       backspaceLabel: "⌫",
-      eliminatedDigits: this.gameState.powerUpEffects.eliminatedDigits || [],
+      eliminatedItems: this.gameState.powerUpEffects.eliminatedDigits || [],
       onGuessChange: (guess) => {
         this.gameState.currentGuess = guess;
         this._buildSlots();

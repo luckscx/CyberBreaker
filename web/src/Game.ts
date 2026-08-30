@@ -9,6 +9,7 @@ import { createRoom, type RoomRule } from "@/api/room";
 import { startBgm } from "@/audio/bgm";
 import { HomeScene } from "@/scenes/HomeScene";
 import { GuessScene } from "@/scenes/GuessScene";
+import { ItemTypeSelectScene } from "@/scenes/ItemTypeSelectScene";
 import { LevelSelectScene } from "@/scenes/LevelSelectScene";
 import { CampaignScene } from "@/scenes/CampaignScene";
 import { LeaderboardScene } from "@/scenes/LeaderboardScene";
@@ -57,6 +58,8 @@ export class Game {
   }
 
   private showHome(): void {
+    this.homeScene?.destroy();
+    this.homeScene = null;
     this.app.stage.removeChildren();
     this.homeScene = new HomeScene(this.app, {
       onModeSelect: (mode) => this.onModeSelect(mode),
@@ -85,9 +88,24 @@ export class Game {
       this.showSettings();
       return;
     }
+    // 教学模式 - 选择物品类型
+    this.showItemTypeSelect();
+  }
+
+  private showItemTypeSelect(): void {
     this.app.stage.removeChildren();
-    const guessScene = new GuessScene(this.app, { onBack: () => this.showHome() });
-    this.app.stage.addChild(guessScene);
+    const scene = new ItemTypeSelectScene(this.app, {
+      onBack: () => this.showHome(),
+      onSelect: (itemType) => {
+        this.app.stage.removeChildren();
+        const guessScene = new GuessScene(this.app, {
+          onBack: () => this.showHome(),
+          itemType,
+        });
+        this.app.stage.addChild(guessScene);
+      },
+    });
+    this.app.stage.addChild(scene);
   }
 
   private showSettings(): void {

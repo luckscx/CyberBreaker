@@ -19,6 +19,7 @@ export interface ButtonOptions {
 export class Button extends Container {
   private bg: Graphics;
   private glow: Graphics;
+  private edgeGlow: Graphics;
   private labelText: Text;
   private fillColor: number;
   private fillHover: number;
@@ -26,6 +27,7 @@ export class Button extends Container {
   private _h: number;
   private animFrame: number = 0;
   private playSound: boolean;
+  private hovered = false;
 
   constructor(opts: ButtonOptions) {
     super();
@@ -42,6 +44,7 @@ export class Button extends Container {
         fontFamily: "system-ui, sans-serif",
         fontSize,
         fill: 0x00ffcc,
+        fontWeight: "600",
         dropShadow: {
           color: 0x00ffcc,
           blur: 4,
@@ -54,15 +57,21 @@ export class Button extends Container {
     this._w = opts.width ?? this.labelText.width + PAD_X * 2;
     this._h = opts.height ?? this.labelText.height + PAD_Y * 2;
 
-    // Glow layer
+    // 外圈霓虹辉光层
     this.glow = new Graphics();
     this.glow.x = -this._w / 2;
     this.glow.y = -this._h / 2;
     this.glow.alpha = 0;
     this.addChild(this.glow);
 
+    // 边框发光层
+    this.edgeGlow = new Graphics();
+    this.edgeGlow.x = -this._w / 2;
+    this.edgeGlow.y = -this._h / 2;
+    this.addChild(this.edgeGlow);
+
     this.bg = new Graphics();
-    this._drawBg(this.fillColor);
+    this._drawBg(this.fillColor, false);
     this.bg.x = -this._w / 2;
     this.bg.y = -this._h / 2;
     this.addChild(this.bg);
@@ -81,11 +90,15 @@ export class Button extends Container {
       opts.onClick();
     });
     this.on("pointerover", () => {
-      this._drawBg(this.fillHover);
+      this.hovered = true;
+      this._drawBg(this.fillHover, true);
+      this.labelText.style.fill = 0xffffff;
       this._animateHover(true);
     });
     this.on("pointerout", () => {
-      this._drawBg(this.fillColor);
+      this.hovered = false;
+      this._drawBg(this.fillColor, false);
+      this.labelText.style.fill = 0x00ffcc;
       this._animateHover(false);
     });
   }
@@ -101,25 +114,39 @@ export class Button extends Container {
     this.labelText.text = text;
   }
 
-  private _drawBg(color: number): void {
+  private _drawBg(color: number, hover: boolean): void {
     this.bg.clear();
+    // 主体
     this.bg.roundRect(0, 0, this._w, this._h, RADIUS).fill({ color });
+    // 顶部玻璃反光
+    this.bg
+      .roundRect(2, 2, this._w - 4, this._h * 0.42, RADIUS - 4)
+      .fill({ color: 0xffffff, alpha: hover ? 0.08 : 0.05 });
+    // 边框
     this.bg.roundRect(0, 0, this._w, this._h, RADIUS).stroke({
       width: 2,
       color: 0x00ffcc,
-      alpha: 0.2,
+      alpha: hover ? 0.85 : 0.3,
     });
 
-    // Draw glow
+    // 外圈柔和辉光
     this.glow.clear();
     this.glow.roundRect(0, 0, this._w, this._h, RADIUS).fill({
       color: 0x00ffcc,
       alpha: 0.15,
     });
+
+    // 边框外侧霓虹光
+    this.edgeGlow.clear();
+    this.edgeGlow.roundRect(-4, -4, this._w + 8, this._h + 8, RADIUS + 4).stroke({
+      width: hover ? 5 : 3,
+      color: 0x00ffcc,
+      alpha: hover ? 0.35 : 0.1,
+    });
   }
 
   private _animateHover(entering: boolean): void {
-    const targetAlpha = entering ? 0.6 : 0;
+    const targetAlpha = entering ? 0.7 : 0;
     const targetScale = entering ? 1.05 : 1;
 
     const duration = 200;

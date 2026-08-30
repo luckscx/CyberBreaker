@@ -11,9 +11,163 @@
       html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a12; }
       #game-root { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
       canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+
+      /* ═══ 加载页 ═══ */
+      #loading {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background:
+          radial-gradient(ellipse at 50% 40%, rgba(0, 255, 204, 0.08) 0%, transparent 60%),
+          #0a0a12;
+        transition: opacity 0.6s ease;
+      }
+      #loading.hidden { opacity: 0; pointer-events: none; }
+
+      /* 网格背景 */
+      #loading::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(0, 255, 204, 0.05) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(0, 255, 204, 0.05) 1px, transparent 1px);
+        background-size: 40px 40px;
+        mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+        -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+        animation: gridPan 6s linear infinite;
+      }
+      @keyframes gridPan {
+        from { transform: translateY(0); }
+        to { transform: translateY(40px); }
+      }
+
+      /* 扫描线 */
+      #loading .scanline {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 120px;
+        background: linear-gradient(
+          to bottom,
+          transparent,
+          rgba(0, 255, 204, 0.06) 45%,
+          rgba(0, 255, 204, 0.14) 50%,
+          rgba(0, 255, 204, 0.06) 55%,
+          transparent
+        );
+        animation: scan 2.4s ease-in-out infinite;
+      }
+      @keyframes scan {
+        0%, 100% { top: -10%; opacity: 0.4; }
+        50% { top: 100%; opacity: 1; }
+      }
+
+      .logo-wrap { position: relative; text-align: center; z-index: 1; }
+      .logo-title {
+        font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+        font-size: 42px;
+        font-weight: 900;
+        letter-spacing: 6px;
+        color: #0fffc9;
+        text-shadow:
+          0 0 8px rgba(0, 255, 204, 0.9),
+          0 0 24px rgba(0, 255, 204, 0.6),
+          0 0 64px rgba(0, 255, 204, 0.35);
+        animation: neonPulse 2s ease-in-out infinite;
+      }
+      @keyframes neonPulse {
+        0%, 100% { text-shadow: 0 0 8px rgba(0,255,204,.9), 0 0 24px rgba(0,255,204,.6), 0 0 64px rgba(0,255,204,.35); }
+        50% { text-shadow: 0 0 12px rgba(0,255,204,1), 0 0 36px rgba(0,255,204,.8), 0 0 90px rgba(0,255,204,.5); }
+      }
+      .logo-sub {
+        margin-top: 10px;
+        font-family: "SF Mono", Consolas, monospace;
+        font-size: 12px;
+        letter-spacing: 8px;
+        color: rgba(0, 255, 204, 0.55);
+      }
+      .logo-halo {
+        position: absolute;
+        left: 50%;
+        top: 55%;
+        width: 220px;
+        height: 220px;
+        transform: translate(-50%, -50%);
+        border-radius: 50%;
+        border: 1px solid rgba(0, 255, 204, 0.25);
+        animation: haloSpin 5s linear infinite;
+        z-index: -1;
+      }
+      .logo-halo::after {
+        content: "";
+        position: absolute;
+        inset: 24px;
+        border-radius: 50%;
+        border: 1px dashed rgba(0, 255, 204, 0.18);
+      }
+      @keyframes haloSpin {
+        from { transform: translate(-50%, -50%) rotate(0deg); }
+        to { transform: translate(-50%, -50%) rotate(360deg); }
+      }
+
+      /* 进度条 */
+      .progress-track {
+        margin-top: 46px;
+        width: 200px;
+        height: 4px;
+        background: rgba(0, 255, 204, 0.12);
+        border-radius: 2px;
+        overflow: hidden;
+        position: relative;
+        z-index: 1;
+      }
+      .progress-bar {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #00b894, #0fffc9, #4dd7ff);
+        border-radius: 2px;
+        box-shadow: 0 0 12px rgba(0, 255, 204, 0.8);
+        animation: progress 2.2s ease-in-out infinite;
+      }
+      @keyframes progress {
+        0% { width: 0%; }
+        55% { width: 82%; }
+        100% { width: 98%; }
+      }
+      .loading-tip {
+        margin-top: 14px;
+        font-size: 11px;
+        letter-spacing: 2px;
+        color: rgba(160, 200, 190, 0.6);
+        animation: blink 1.6s ease-in-out infinite;
+      }
+      @keyframes blink { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
     </style>
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-F1Q7PP0X7N"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag() { dataLayer.push(arguments); }
+      gtag('js', new Date());
+      gtag('config', 'G-F1Q7PP0X7N');
+    </script>
   </head>
   <body>
+    <div id="loading">
+      <div class="scanline"></div>
+      <div class="logo-wrap">
+        <div class="logo-halo"></div>
+        <div class="logo-title">赛博密码</div>
+        <div class="logo-sub">CYBER BREAKER</div>
+      </div>
+      <div class="progress-track"><div class="progress-bar"></div></div>
+      <div class="loading-tip">系统接入中 · SYSTEM LINKING</div>
+    </div>
     <div id="game-root"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -8,13 +8,50 @@ export function generateSecret(): string {
   return arr.slice(0, 4).join("");
 }
 
-/** 判断猜测结果：A=位置数字都对，B=数字对位置错 */
+/**
+ * 生成秘密序列（支持任意物品集合）
+ * @param items 可用物品数组（如数字["0"-"9"]或水果["🍎","🍊"...]）
+ * @param length 序列长度（默认 4）
+ * @param allowRepeat 是否允许重复（默认 false）
+ */
+export function generateSecretFromItems(
+  items: string[],
+  length = 4,
+  allowRepeat = false
+): string {
+  if (!allowRepeat && items.length < length) {
+    throw new Error(`Items count (${items.length}) < required length (${length})`);
+  }
+
+  const result: string[] = [];
+  const available = [...items];
+
+  for (let i = 0; i < length; i++) {
+    const idx = Math.floor(Math.random() * available.length);
+    result.push(available[idx]);
+    if (!allowRepeat) {
+      available.splice(idx, 1); // 移除已选物品
+    }
+  }
+
+  return result.join("");
+}
+
+/**
+ * 判断猜测结果：A=位置物品都对，B=物品对位置错
+ * 支持数字、emoji 等任意字符序列
+ *
+ * 注意：对于 emoji，需要正确分割字符（某些 emoji 由多个 Unicode 码点组成）
+ */
 export function evaluate(secret: string, guess: string): { a: number; b: number } {
   let a = 0;
   let b = 0;
-  const g = guess.split("");
-  const s = secret.split("");
-  for (let i = 0; i < 4; i++) {
+  // 使用 Array.from 正确处理 emoji 等 Unicode 字符
+  const g = Array.from(guess);
+  const s = Array.from(secret);
+  const len = Math.min(g.length, s.length);
+
+  for (let i = 0; i < len; i++) {
     if (g[i] === s[i]) a++;
     else if (s.includes(g[i])) b++;
   }
@@ -25,6 +62,35 @@ export function isValidGuess(guess: string): boolean {
   if (guess.length !== 4) return false;
   const set = new Set(guess.split(""));
   return set.size === 4 && /^\d{4}$/.test(guess);
+}
+
+/**
+ * 验证猜测是否有效（支持任意物品类型）
+ * @param guess 猜测字符串
+ * @param validItems 有效物品集合
+ * @param length 要求长度（默认 4）
+ * @param allowRepeat 是否允许重复（默认 false）
+ */
+export function isValidGuessForItems(
+  guess: string,
+  validItems: string[],
+  length = 4,
+  allowRepeat = false
+): boolean {
+  const items = Array.from(guess);
+  if (items.length !== length) return false;
+
+  // 检查每个物品是否在有效集合中
+  for (const item of items) {
+    if (!validItems.includes(item)) return false;
+  }
+
+  // 检查是否有重复
+  if (!allowRepeat && new Set(items).size !== items.length) {
+    return false;
+  }
+
+  return true;
 }
 
 /** 按规则校验：standard=4位不重复，position_only=4位数字可重复 */

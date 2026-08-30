@@ -15,6 +15,15 @@ async function bootstrap() {
   });
   root.appendChild(app.canvas);
 
+  // 隐藏加载页（淡出）
+  const loading = document.querySelector<HTMLDivElement>("#loading");
+  if (loading) {
+    setTimeout(() => {
+      loading.classList.add("hidden");
+      setTimeout(() => loading.remove(), 700);
+    }, 250);
+  }
+
   const game = new Game(app);
   game.start();
 }
