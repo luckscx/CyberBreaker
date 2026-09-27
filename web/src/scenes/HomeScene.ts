@@ -1,7 +1,7 @@
 import type { Application } from "pixi.js";
 import { Assets, Container, Graphics, Sprite, Text } from "pixi.js";
 import { Button } from "@/components/Button";
-import { MusicToggle } from "@/components/MusicToggle";
+import { SceneChrome } from "@/components/SceneChrome";
 import type { GameMode } from "@/types";
 
 const TITLE_Y = 0.21;
@@ -14,6 +14,7 @@ export interface HomeSceneOptions {
 
 export class HomeScene extends Container {
   private _tickers: Array<() => void> = [];
+  private chrome!: SceneChrome;
 
   constructor(
     private app: Application,
@@ -21,9 +22,35 @@ export class HomeScene extends Container {
   ) {
     super();
     this._loadCoverBg();
+    // 顶栏用统一外壳：返回键（此处无）/ 音乐键 / 设置键位置与全站一致。
+    // 封面大图自带背景，故关掉外壳的背景层，避免把封面盖住。
+    // 注意旧实现里设置键是「中心对齐」而音乐键是「左上角对齐」，
+    // 两套原点混用导致点位难以推算，现在统一由 SceneChrome 决定。
+    this.chrome = new SceneChrome({
+      width: this.app.screen.width,
+      height: this.app.screen.height,
+      background: false,
+      music: true,
+      extras: ({ right, y, size }) => {
+        const gear = new Container();
+        const circle = new Graphics();
+        circle.circle(0, 0, size / 2).fill({ color: 0x1a2332, alpha: 0.8 });
+        circle.circle(0, 0, size / 2).stroke({ width: 2, color: 0x334455 });
+        gear.addChild(circle);
+        const icon = new Text({ text: "⚙️", style: { fontSize: 24 } });
+        icon.anchor.set(0.5);
+        gear.addChild(icon);
+        gear.x = right - size / 2;
+        gear.y = y + size / 2;
+        gear.eventMode = "static";
+        gear.cursor = "pointer";
+        gear.on("pointertap", () => this.opts.onModeSelect("settings"));
+        return gear;
+      },
+    });
+    this.addChild(this.chrome);
     this.addChild(this._buildTitle());
     this._addButtons();
-    this._addMusicButton();
   }
 
   override destroy(options?: Parameters<Container["destroy"]>[0]): void {
@@ -35,39 +62,6 @@ export class HomeScene extends Container {
   private _tick(fn: () => void): void {
     this._tickers.push(fn);
     this.app.ticker.add(fn);
-  }
-
-  private _addMusicButton(): void {
-    const toggleSize = 48;
-
-    // Settings button (left side of music toggle)
-    const settingsBtn = new Container();
-
-    const settingsCircle = new Graphics();
-    settingsCircle.circle(0, 0, toggleSize / 2).fill({ color: 0x1a2332, alpha: 0.8 });
-    settingsCircle.circle(0, 0, toggleSize / 2).stroke({ width: 2, color: 0x334455 });
-    settingsBtn.addChild(settingsCircle);
-
-    const settingsText = new Text({
-      text: "⚙️",
-      style: { fontSize: 24 },
-    });
-    settingsText.anchor.set(0.5);
-    settingsBtn.addChild(settingsText);
-
-    settingsBtn.x = this.app.screen.width - 16 - toggleSize * 2 - 10;
-    settingsBtn.y = 16 + toggleSize / 2;
-    settingsBtn.eventMode = "static";
-    settingsBtn.cursor = "pointer";
-    settingsBtn.on("pointerdown", () => this.opts.onModeSelect("settings"));
-    this.addChild(settingsBtn);
-
-    // Music toggle
-    const musicToggle = new MusicToggle({
-      x: this.app.screen.width - 16 - toggleSize,
-      y: 16,
-    });
-    this.addChild(musicToggle);
   }
 
   private _loadCoverBg(): void {

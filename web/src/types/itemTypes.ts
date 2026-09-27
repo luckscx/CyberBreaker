@@ -10,17 +10,24 @@ export interface ItemType {
   name: string;
   /** 物品列表（数字为字符串，水果为 emoji） */
   items: string[];
-  /** UI 配置 */
+  /**
+   * UI 配置。
+   *
+   * 注意：除 `columns` 外，尺寸字段（slotSize / keySize / fontSize / slotFontSize）
+   * 自本次重构起**不再生效**。玩法区几何统一由 `@/ui/layout.ts` 的
+   * `computePlayGeometry()` 依据屏幕宽度推算，以保证全站一致 + 移动端可点面积达标。
+   * 字段保留仅为兼容既有数据与外部引用，新代码不要读取它们。
+   */
   ui: {
-    /** 输入槽大小 */
+    /** @deprecated 见上，改为 computePlayGeometry() 推算 */
     slotSize: number;
-    /** 按键大小 */
+    /** @deprecated 见上，改为 computePlayGeometry() 推算 */
     keySize: number;
-    /** 字号（数字用较小字号，emoji 用较大字号） */
+    /** @deprecated 见上，改为 computePlayGeometry() 推算 */
     fontSize: number;
-    /** 槽内字号 */
+    /** @deprecated 见上，改为 computePlayGeometry() 推算 */
     slotFontSize: number;
-    /** 每行列数 */
+    /** 每行列数（唯一仍参与布局计算的字段） */
     columns: number;
   };
   /** 游戏规则说明 */
@@ -33,7 +40,9 @@ export interface ItemType {
 export const ITEM_TYPE_DIGITS: ItemType = {
   id: "digits",
   name: "数字",
-  items: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+  // 顺序即键盘顺序：1-9 铺满 3×3 后 0 落在最后一行中间，
+  // 与所有手机拨号盘一致，且能顺带把 ⌫ / ✓ 放进最后一行两侧（省一整行高度）。
+  items: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
   ui: {
     slotSize: 48,
     keySize: 54,

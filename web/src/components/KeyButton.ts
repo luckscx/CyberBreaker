@@ -1,5 +1,6 @@
 import { Container, Graphics, Rectangle, Text } from "pixi.js";
 import { playClick, playDisabledClick } from "@/audio/click";
+import { Touch } from "@/ui/theme";
 
 const DEPTH = 4; // 3D 深度
 const RADIUS = 6;
@@ -71,6 +72,15 @@ export class KeyButton extends Container {
   private palette: Palette;
   private _pulseRaf: number = 0;
   private _pulseStart = 0;
+  /** 「已排除 / 已占用」置灰角标 */
+  private _muted = false;
+  private _mutedBadgeText?: string;
+  private mutedBadge: Text | null = null;
+  /** 本次按下的指针，用于滑动取消判定 */
+  private pressPointerId = -1;
+  private pressStartX = 0;
+  private pressStartY = 0;
+  private pressCancelled = false;
 
   constructor(opts: KeyButtonOptions) {
     super();
@@ -142,14 +152,52 @@ export class KeyButton extends Container {
     this._draw3DButton(DEPTH);
     this._applyStateLook();
 
-    this.on("pointerdown", () => {
+    // ── 点按语义 ──
+    // 旧实现直接在 pointerdown 里触发 onClick：手机上手指在相邻键之间滑过
+    // 就会连点，且误触无法挽回（键间距只有 6~8px）。
+    // 现在：pointerdown 只给视觉反馈，真正的 onClick 走 pointertap
+    //（按下与抬起必须落在同一对象），位移超过阈值则判定为滑动并取消。
+    this.on("pointerdown", (e) => {
+      this.pressPointerId = e.pointerId;
+      this.pressStartX = e.global.x;
+      this.pressStartY = e.global.y;
+      this.pressCancelled = false;
+      if (this._disabled) return;
+      this._animatePress();
+    });
+
+    this.on("globalpointermove", (e) => {
+      if (this.pressPointerId !== e.pointerId || this.pressCancelled) return;
+      if (this._disabled) return;
+      const dx = e.global.x - this.pressStartX;
+      const dy = e.global.y - this.pressStartY;
+      if (Math.hypot(dx, dy) > Touch.cancelSlop) {
+        this.pressCancelled = true;
+        this._draw3DButton(DEPTH);
+      }
+    });
+
+    const endPress = () => {
+      this.pressPointerId = -1;
+    };
+    this.on("pointerup", endPress);
+    this.on("pointercancel", endPress);
+    this.on("pointerupoutside", () => {
+      this.pressPointerId = -1;
+      this.pressCancelled = false;
+    });
+
+    this.on("pointertap", () => {
+      if (this.pressCancelled) {
+        this.pressCancelled = false;
+        return;
+      }
       if (this._disabled) {
         playDisabledClick();
         this._animateShake();
         return;
       }
       if (this.playSound) playClick();
-      this._animatePress();
       opts.onClick();
     });
     this.on("pointerover", () => {
@@ -185,6 +233,44 @@ export class KeyButton extends Container {
 
   get disabled(): boolean {
     return this._disabled;
+  }
+
+  /**
+   * 置灰但仍占位（用于「本回合已使用」「已被道具排除」的物品键）。
+   *
+   * 与 setDisabled 的差别：键盘布局保持不变，并额外显示一个角标说明原因。
+   * 旧实现是把这类键直接 `visible = false`，键盘上出现空洞 →
+   * 玩家按位置记忆点键时极易错按，是手机上误触的主要来源之一。
+   */
+  setMuted(muted: boolean, badge?: string): void {
+    if (this._muted === muted && this._mutedBadgeText === badge) return;
+    this._muted = muted;
+
+    if (muted && badge) {
+      if (!this.mutedBadge) {
+        this.mutedBadge = new Text({
+          text: badge,
+          style: {
+            fontFamily: "system-ui, sans-serif",
+            fontSize: 9,
+            fill: 0xffffff,
+            fontWeight: "bold",
+          },
+        });
+        this.mutedBadge.anchor.set(0.5);
+        this.mutedBadge.alpha = 0.8;
+      }
+      this.mutedBadge.text = badge;
+      this.mutedBadge.y = this._h / 2 - 4;
+      if (!this.mutedBadge.parent) this.faceGroup.addChild(this.mutedBadge);
+      this.mutedBadge.visible = true;
+    } else if (this.mutedBadge) {
+      this.mutedBadge.visible = false;
+    }
+    this._mutedBadgeText = muted ? badge : undefined;
+
+    // 置灰视觉：整体压暗 + 降饱和感（用 alpha 与描边一起表达）
+    this.alpha = this._disabled ? 0.45 : muted ? 0.62 : 1;
   }
 
   /** 就绪态：持续脉冲发光，引导用户点击（如 4 位填齐后的确认键） */

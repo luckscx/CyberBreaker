@@ -1,9 +1,9 @@
 import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
 import { Button } from "@/components/Button";
-import { BackButton } from "@/components/BackButton";
-import { MusicToggle } from "@/components/MusicToggle";
-import { Background } from "@/components/Background";
+
+
+import { SceneChrome } from "@/components/SceneChrome";
 import { playClick } from "@/audio/click";
 import { createFreeRoom, getFreeRoom } from "@/api/freeRoom";
 
@@ -15,6 +15,7 @@ export interface FreeGuessHomeOptions {
 
 export class FreeGuessHome extends Container {
   private app: Application;
+  private chrome!: SceneChrome;
   private statusText: Text;
   private inputEl: HTMLInputElement | null = null;
   private limitInputEl: HTMLInputElement | null = null;
@@ -27,30 +28,24 @@ export class FreeGuessHome extends Container {
     const h = this.app.screen.height;
     const cx = w / 2;
 
-    const bg = new Background({ width: w, height: h, particleCount: 20 });
-    this.addChild(bg);
-    this.app.ticker.add(() => bg.animate());
-
-    const back = new BackButton({ x: 16 + 24, y: 16 + 24, onClick: () => { playClick(); this._cleanup(); opts.onBack(); } });
-    this.addChild(back);
-
-    const music = new MusicToggle({ x: w - 16 - 24, y: 16 + 24 });
-    this.addChild(music);
-
-    const title = new Text({
-      text: "多人猜数房间",
-      style: { fontFamily: "system-ui", fontSize: 24, fill: 0x00ffcc, fontWeight: "bold" },
+    // 统一顶栏（原来返回键在 (40,40)、音乐键在 w-40，与全站基线不一致）
+    this.chrome = new SceneChrome({
+      width: w,
+      height: h,
+      onBack: () => { playClick(); this._cleanup(); opts.onBack(); },
+      title: "多人猜数房间",
+      particleCount: 20,
     });
-    title.anchor.set(0.5);
-    title.x = cx; title.y = h * 0.12;
-    this.addChild(title);
+    this.addChild(this.chrome);
+    this.app.ticker.add(this._animate, this);
 
     const subtitle = new Text({
       text: "2-8人同房间，自由猜数，抢先破解！",
       style: { fontFamily: "system-ui", fontSize: 12, fill: 0x99aabb },
     });
     subtitle.anchor.set(0.5);
-    subtitle.x = cx; subtitle.y = h * 0.17;
+    // 副标题紧随统一顶栏，避免沿用旧的按屏高比例定位而与标题脱节
+    subtitle.x = cx; subtitle.y = this.chrome.contentTop + 6;
     this.addChild(subtitle);
 
     // --- Create Section ---
@@ -247,6 +242,10 @@ export class FreeGuessHome extends Container {
     }
   }
 
+  private _animate = (): void => {
+    this.chrome?.animate();
+  };
+
   private _cleanup(): void {
     this.inputEl?.remove();
     this.inputEl = null;
@@ -257,6 +256,8 @@ export class FreeGuessHome extends Container {
   }
 
   override destroy(options?: Parameters<Container["destroy"]>[0]): void {
+    // 原实现把 ticker 回调写成匿名箭头函数，销毁时无法移除（每次进入都会泄漏一个回调）
+    this.app.ticker.remove(this._animate, this);
     this._cleanup();
     super.destroy(options);
   }

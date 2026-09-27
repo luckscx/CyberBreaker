@@ -85,10 +85,58 @@ export const Space = {
 
 /** 屏幕安全边距 */
 export const Screen = {
-  padX: 20,
+  padX: 16,
   padTop: 18,
   /** 顶部导航条高度（返回 / 音乐按钮所在行） */
-  topBar: 56,
+  topBar: 60,
+  /** 底部安全间距（Home Indicator 之上） */
+  padBottom: 14,
+  /** 玩法内容区最大宽度（宽屏居中，避免元素被拉散） */
+  maxContentWidth: 420,
+} as const;
+
+/**
+ * 触摸交互尺寸。
+ * 移动端可点区域不得小于 48pt，否则误触率显著上升。
+ * 间距不足时优先增大按钮、其次压缩留白，绝不缩小到 minTarget 以下。
+ */
+export const Touch = {
+  /** 最小可点边长 */
+  minTarget: 48,
+  /** 键盘按键最小边长 */
+  minKey: 52,
+  /** 键盘按键最大边长（避免宽屏上过大） */
+  maxKey: 66,
+  /** 按下后手指移动超过该距离则视为「滑动取消」，不触发点击 */
+  cancelSlop: 18,
+} as const;
+
+/**
+ * 玩法区统一尺寸。
+ * 键盘 / 输入槽 / 历史板全站共用同一套数值，杜绝各场景各写一份魔法数字。
+ */
+export const Play = {
+  /** 槽位与按键的间距 */
+  gap: 8,
+  /** 输入槽圆角 */
+  slotRadius: 12,
+  /** 按键圆角 */
+  keyRadius: 10,
+  /** 按键字号 */
+  keyFontSize: 24,
+  /** 操作键（退格 / 确认）字号 */
+  actionFontSize: 14,
+  /** 输入槽与键盘之间的垂直间距 */
+  slotToKeypad: 14,
+  /** 历史板：行高 / 行间距 / 圆角 */
+  rowHeight: 42,
+  rowGap: 6,
+  rowRadius: 10,
+  /** 历史板：单条猜想的数字方块 */
+  chipSize: 26,
+  chipGap: 4,
+  /** 历史板：A/B 徽章半径 */
+  badgeRadius: 10,
 } as const;
 
 /** 动效时长（毫秒） */

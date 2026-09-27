@@ -1,8 +1,6 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { Button } from "../components/Button";
-import { Background } from "../components/Background";
-import { MusicToggle } from "../components/MusicToggle";
-import { BackButton } from "../components/BackButton";
+import { SceneChrome } from "../components/SceneChrome";
 import { getCampaignLeaderboard, LeaderboardEntry } from "../api/leaderboard";
 import { getLevelById } from "../data/levels";
 
@@ -11,7 +9,7 @@ export interface LeaderboardSceneOptions {
 }
 
 export class LeaderboardScene extends Container {
-  private bg!: Background;
+  private chrome!: SceneChrome;
   private currentLevelId: number = 1;
   private currentPage: number = 1;
   private leaderboardData: LeaderboardEntry[] = [];
@@ -31,48 +29,21 @@ export class LeaderboardScene extends Container {
   private _buildUI(): void {
     const { width, height } = this.app.screen;
 
-    // 背景
-    this.bg = new Background({ width, height });
-    this.addChild(this.bg);
-
-    // 标题
-    const title = new Text({
-      text: "🏆 排行榜",
-      style: {
-        fontFamily: "Arial",
-        fontSize: 24,
-        fill: 0x00ff88,
-        fontWeight: "bold",
-      },
+    // 统一顶栏（返回 / 标题 / 音乐全站同一基线）
+    this.chrome = new SceneChrome({
+      width,
+      height,
+      onBack: () => this.opts.onBack(),
+      title: "🏆 排行榜",
     });
-    title.anchor.set(0.5, 0);
-    title.position.set(width / 2, 60);
-    this.addChild(title);
-
-    // 返回按钮
-    const backButton = new BackButton({
-      x: 16,
-      y: 16,
-      onClick: () => {
-        this.opts.onBack();
-      },
-    });
-    this.addChild(backButton);
-
-    // 音乐按钮（右上角）
-    const toggleSize = 48;
-    const musicToggle = new MusicToggle({
-      x: width - 16 - toggleSize,
-      y: 16,
-    });
-    this.addChild(musicToggle);
+    this.addChild(this.chrome);
 
     // 关卡选择器
     this._buildLevelSelector();
 
     // 内容容器
     this.contentContainer = new Container();
-    this.contentContainer.position.set(0, 140);
+    this.contentContainer.position.set(0, this.chrome.contentTop + 46);
     this.addChild(this.contentContainer);
   }
 
@@ -381,6 +352,6 @@ export class LeaderboardScene extends Container {
   }
 
   animate(): void {
-    this.bg.animate();
+    this.chrome.animate();
   }
 }

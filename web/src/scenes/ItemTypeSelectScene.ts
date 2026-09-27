@@ -1,9 +1,7 @@
 import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
 import { Button } from "@/components/Button";
-import { Background } from "@/components/Background";
-import { MusicToggle } from "@/components/MusicToggle";
-import { BackButton } from "@/components/BackButton";
+import { SceneChrome } from "@/components/SceneChrome";
 import type { ItemType } from "@/types/itemTypes";
 import { ALL_ITEM_TYPES } from "@/types/itemTypes";
 
@@ -13,62 +11,27 @@ export interface ItemTypeSelectSceneOptions {
 }
 
 export class ItemTypeSelectScene extends Container {
-  private bg: Background;
+  private chrome: SceneChrome;
 
   constructor(private app: Application, opts: ItemTypeSelectSceneOptions) {
     super();
 
-    // Add animated background
-    this.bg = new Background({
-      width: app.screen.width,
-      height: app.screen.height,
-      particleCount: 25,
-    });
-    this.addChild(this.bg);
-
     const w = app.screen.width;
     const cx = w / 2;
 
-    const top = 12;
-    const backButton = new BackButton({
-      x: 12,
-      y: 12,
-      onClick: () => opts.onBack(),
+    // 统一顶栏：返回键 / 标题 / 音乐键全站同一基线、同一尺寸
+    this.chrome = new SceneChrome({
+      width: w,
+      height: app.screen.height,
+      onBack: () => opts.onBack(),
+      title: "选择物品类型",
+      subtitle: "Choose your game items",
+      particleCount: 25,
     });
-    this.addChild(backButton);
-
-    const toggleSize = 44;
-    const musicToggle = new MusicToggle({
-      x: w - 12 - toggleSize,
-      y: 12,
-    });
-    this.addChild(musicToggle);
-
-    const title = new Text({
-      text: "选择物品类型",
-      style: { fontFamily: "system-ui", fontSize: 24, fill: 0x00ffcc, fontWeight: "bold" },
-    });
-    title.anchor.set(0.5);
-    title.x = cx;
-    title.y = top + 32;
-    this.addChild(title);
-
-    const subtitle = new Text({
-      text: "Choose your game items",
-      style: {
-        fontFamily: "system-ui",
-        fontSize: 12,
-        fill: 0x99aabb,
-        align: "center",
-      },
-    });
-    subtitle.anchor.set(0.5, 0);
-    subtitle.x = cx;
-    subtitle.y = top + 60;
-    this.addChild(subtitle);
+    this.addChild(this.chrome);
 
     // Item type cards
-    const cardsStartY = top + 100;
+    const cardsStartY = this.chrome.contentTop + 24;
     const cardGap = 20;
     const buttonWidth = Math.min(280, w - 60);
 
@@ -161,6 +124,6 @@ export class ItemTypeSelectScene extends Container {
   }
 
   private _animate = (): void => {
-    this.bg.animate();
+    this.chrome.animate();
   };
 }

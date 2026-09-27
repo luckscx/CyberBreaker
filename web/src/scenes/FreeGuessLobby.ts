@@ -1,9 +1,9 @@
 import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
 import { Button } from "@/components/Button";
-import { BackButton } from "@/components/BackButton";
-import { MusicToggle } from "@/components/MusicToggle";
-import { Background } from "@/components/Background";
+
+
+import { SceneChrome } from "@/components/SceneChrome";
 import { playClick } from "@/audio/click";
 import { FreeRoomClient, type FreeRoomMsg, type FreePlayerInfo } from "@/freeRoom/client";
 
@@ -27,6 +27,7 @@ export class FreeGuessLobby extends Container {
   private statusText: Text;
   private startBtn: Button | null = null;
   private unsub: (() => void) | null = null;
+  private chrome!: SceneChrome;
   private players: FreePlayerInfo[] = [];
 
   constructor(private opts: FreeGuessLobbyOptions) {
@@ -38,23 +39,16 @@ export class FreeGuessLobby extends Container {
     const h = this.app.screen.height;
     const cx = w / 2;
 
-    const bg = new Background({ width: w, height: h, particleCount: 20 });
-    this.addChild(bg);
-    this.app.ticker.add(() => bg.animate());
-
-    const back = new BackButton({ x: 16 + 24, y: 16 + 24, onClick: () => { playClick(); opts.onBack(); } });
-    this.addChild(back);
-    const music = new MusicToggle({ x: w - 16 - 24, y: 16 + 24 });
-    this.addChild(music);
-
-    // Room info
-    const title = new Text({
-      text: opts.roomName,
-      style: { fontFamily: "system-ui", fontSize: 20, fill: 0x00ffcc, fontWeight: "bold" },
+    // 统一顶栏
+    this.chrome = new SceneChrome({
+      width: w,
+      height: h,
+      onBack: () => { playClick(); opts.onBack(); },
+      title: opts.roomName,
+      particleCount: 20,
     });
-    title.anchor.set(0.5);
-    title.x = cx; title.y = 70;
-    this.addChild(title);
+    this.addChild(this.chrome);
+    this.app.ticker.add(this._animate, this);
 
     const codeText = new Text({
       text: `房间码：${opts.roomCode}`,
@@ -190,7 +184,12 @@ export class FreeGuessLobby extends Container {
     this.client.start();
   }
 
+  private _animate = (): void => {
+    this.chrome?.animate();
+  };
+
   override destroy(options?: Parameters<Container["destroy"]>[0]): void {
+    this.app.ticker.remove(this._animate, this);
     this.unsub?.();
     super.destroy(options);
   }

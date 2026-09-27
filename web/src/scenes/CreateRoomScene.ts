@@ -1,6 +1,7 @@
 import type { Application } from "pixi.js";
 import { Container, Text } from "pixi.js";
 import { Button } from "@/components/Button";
+import { SceneChrome } from "@/components/SceneChrome";
 import { playClick } from "@/audio/click";
 
 export interface CreateRoomSceneOptions {
@@ -11,6 +12,8 @@ export interface CreateRoomSceneOptions {
 }
 
 export class CreateRoomScene extends Container {
+  private chrome!: SceneChrome;
+
   constructor(
     app: Application,
     opts: CreateRoomSceneOptions
@@ -28,18 +31,15 @@ export class CreateRoomScene extends Container {
         opts.onBack();
       },
     });
-    back.x = 60;
-    back.y = 50;
-    this.addChild(back);
-
-    const title = new Text({
-      text: "房间已创建",
-      style: { fontFamily: "system-ui", fontSize: 26, fill: 0x00ffcc },
+    // 统一顶栏（返回键原来在 (60,50)，与全站 (16,9) 不一致）
+    back.destroy();
+    this.chrome = new SceneChrome({
+      width: w,
+      height: h,
+      onBack: () => { playClick(); opts.onBack(); },
+      title: "房间已创建",
     });
-    title.anchor.set(0.5);
-    title.x = cx;
-    title.y = 100;
-    this.addChild(title);
+    this.addChild(this.chrome);
 
     const enterBtn = new Button({
       label: "进入房间",

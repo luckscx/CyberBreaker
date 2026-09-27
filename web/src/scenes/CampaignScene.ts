@@ -1,10 +1,9 @@
-import { Application, Container, Graphics, Text } from "pixi.js";
+import { Application, Container, Graphics, Rectangle, Text } from "pixi.js";
 import { Button } from "../components/Button";
 import { GuessInput } from "../components/GuessInput";
-import { PowerUpButton } from "../components/PowerUpButton";
-import { Background } from "../components/Background";
-import { MusicToggle } from "../components/MusicToggle";
-import { BackButton } from "../components/BackButton";
+import { GuessBoard, type GuessRecord } from "../components/GuessBoard";
+import { ResultBanner } from "../components/ResultBanner";
+import { SceneChrome } from "../components/SceneChrome";
 import { BackpackButton } from "../components/BackpackButton";
 import { BackpackModal } from "../components/BackpackModal";
 import { LevelConfig, LevelGameState, PowerUpType } from "../types/level";
@@ -16,6 +15,13 @@ import { PowerUpEffects } from "../logic/powerUpEffects";
 import { playClick } from "../audio/click";
 import { submitCampaignScore } from "../api/leaderboard";
 import { getNickname, setNickname } from "../services/settingsManager";
+import { ITEM_TYPE_DIGITS } from "../types/itemTypes";
+import {
+  computePlayGeometry,
+  computePlayScreen,
+  observeResize,
+} from "../ui/layout";
+import { Color, Font, Play, Radius, Size } from "../ui/theme";
 
 export interface CampaignSceneOptions {
   levelId: number;
@@ -23,25 +29,47 @@ export interface CampaignSceneOptions {
   onNextLevel?: (nextLevelId: number) => void;
 }
 
+/** 统计条单行高度 */
+const STATS_H = 26;
+/** 道具效果提示行高度 */
+const HINT_H = 20;
+
+/**
+ * 关卡模式。
+ *
+ * 本次重构只替换「呈现层」，玩法逻辑（道具、计时、星级、排行榜）保持不变：
+ *   - 顶栏改用统一的 SceneChrome（返回键 / 标题 / 音乐 / 背包位置全站一致）
+ *   - 输入槽与键盘改用统一的 computePlayGeometry，槽位与键盘等宽对齐
+ *   - 历史记录由「8 行等宽纯文本」换成统一的 GuessBoard（带序号、方块、A/B 徽章、可滚动）
+ *   - 结果反馈由一行 resultText 换成独立的 ResultBanner，不再被键盘遮挡
+ *   - 整页自下而上排布 + 尺寸变化重建，短屏手机不再把内容顶出屏幕
+ */
 export class CampaignScene extends Container {
   private levelConfig: LevelConfig;
   private gameState: LevelGameState;
-  private bg: Background;
 
-  // UI Elements
-  private slotsContainer: Container;
+  // 分层：UI 层可整体重建，模态层与结算层始终在其上
+  private uiLayer: Container;
+  private modalLayer: Container;
+  private overlayLayer: Container;
+
+  private chrome: SceneChrome | null = null;
+  private board: GuessBoard | null = null;
+  private result: ResultBanner | null = null;
+  private slotsContainer: Container | null = null;
   private guessInput: GuessInput | null = null;
-  private historyText: Text;
-  private resultText: Text;
   private timerText: Text | null = null;
   private guessesText: Text | null = null;
-  private powerUpButtons: Map<PowerUpType, PowerUpButton> = new Map();
-  private effectHintText: Text;
+  private effectHintText: Text | null = null;
   private backpackButton: BackpackButton | null = null;
   private backpackModal: BackpackModal | null = null;
 
-  private timerId: ReturnType<typeof setInterval> | null = 0;
-  private startTime: number = 0;
+  /** 结算覆盖层的重建参数（尺寸变化后需要重放） */
+  private pendingResult: { victory: boolean; stars: number; isPerfect: boolean } | null = null;
+
+  private timerId: ReturnType<typeof setInterval> | null = null;
+  private startTime = 0;
+  private stopResize: (() => void) | null = null;
 
   constructor(
     private app: Application,
@@ -49,14 +77,12 @@ export class CampaignScene extends Container {
   ) {
     super();
 
-    // 加载关卡配置
     const config = getLevelById(opts.levelId);
     if (!config) {
       throw new Error(`Level ${opts.levelId} not found`);
     }
     this.levelConfig = config;
 
-    // 初始化游戏状态
     const progress = ProgressManager.load();
     this.gameState = {
       levelConfig: config,
@@ -75,168 +101,128 @@ export class CampaignScene extends Container {
       powerUpEffects: {},
     };
 
-    this.bg = new Background({
-      width: app.screen.width,
-      height: app.screen.height,
-    });
-    this.addChild(this.bg);
-
-    this.slotsContainer = new Container();
-    this.historyText = new Text({ text: "", style: {} });
-    this.resultText = new Text({ text: "", style: {} });
-    this.effectHintText = new Text({ text: "", style: {} });
+    this.uiLayer = new Container();
+    this.modalLayer = new Container();
+    this.overlayLayer = new Container();
+    this.addChild(this.uiLayer, this.modalLayer, this.overlayLayer);
 
     this._buildUI();
     this.startTime = Date.now();
-    if (config.timeLimit) {
-      this._startTimer();
-    }
+    if (config.timeLimit) this._startTimer();
+
+    this.stopResize = observeResize(() => this._relayout());
   }
+
+  override destroy(options?: Parameters<Container["destroy"]>[0]): void {
+    this._stopTimer();
+    this.stopResize?.();
+    this.stopResize = null;
+    this._removeNicknameInput();
+    super.destroy(options);
+  }
+
+  animate(): void {
+    this.chrome?.animate();
+  }
+
+  // ════════════════════════════════════════
+  //  构建
+  // ════════════════════════════════════════
 
   private _buildUI(): void {
     const { width, height } = this.app.screen;
-    const centerX = width / 2;
 
-    // 顶部工具栏容器
-    const topBarY = 25;
-
-    // 返回按钮（左上角）
-    const backButton = new BackButton({
-      x: 16,
-      y: 16,
-      onClick: () => {
+    this.chrome = new SceneChrome({
+      width,
+      height,
+      onBack: () => {
         this._stopTimer();
         this.opts.onBack();
       },
+      title: this.levelConfig.name,
+      subtitle: this.levelConfig.description,
+      extras: ({ right, y, size }) => this._buildBackpackButton(right, y, size),
     });
-    this.addChild(backButton);
+    this.uiLayer.addChild(this.chrome);
 
-    // 音乐按钮（右上角）
-    const toggleSize = 48;
-    const musicToggle = new MusicToggle({
-      x: width - 16 - toggleSize,
-      y: 16,
+    const geometry = computePlayGeometry(width, ITEM_TYPE_DIGITS);
+    // 恒定预留提示行高度：若按「有无提示」动态变化，
+    // 使用道具后提示行会突然出现并压到历史板上（曾出现重叠）。
+    // 恒定占位既避免重排跳动，也让历史板高度稳定。
+    const statsH = STATS_H + HINT_H;
+    // showSlots: true 只为「预留出槽位那一条高度」，
+    // 真正的槽由本场景自绘（要显示「揭示」道具的数字），故键盘本身不画槽。
+    const layout = computePlayScreen({
+      chrome: this.chrome,
+      geometry,
+      showSlots: true,
+      statsH,
     });
-    this.addChild(musicToggle);
 
-    // 背包按钮（音乐按钮左侧）
-    const totalItems = Object.values(this.gameState.availablePowerUps).reduce((sum, count) => sum + count, 0);
-    this.backpackButton = new BackpackButton({
-      x: width - 16 - toggleSize * 2 - 10,
-      y: 16,
-      onClick: () => this._showBackpack(),
-    });
-    this.backpackButton.updateCount(totalItems);
-    this.addChild(this.backpackButton);
+    // ── 统计条：剩余时间 / 剩余次数 ──
+    this.timerText = null;
+    this.guessesText = null;
+    this._buildStats(layout.stats.y, this.chrome.contentLeft, this.chrome.contentRight);
 
-    // 关卡标题（居中，向下移动避免与按钮重叠）
-    const title = new Text({
-      text: this.levelConfig.name,
+    // ── 道具效果提示 ──
+    this.effectHintText = new Text({
+      text: "",
       style: {
-        fontFamily: "Arial, sans-serif",
-        fontSize: 24,
-        fill: this.levelConfig.isBoss ? 0xff0044 : 0xffffff,
-        fontWeight: "bold",
-      },
-    });
-    title.anchor.set(0.5);
-    title.position.set(centerX, 60);
-    this.addChild(title);
-
-    // 关卡描述（标题下方）
-    const description = new Text({
-      text: this.levelConfig.description,
-      style: {
-        fontFamily: "Arial, sans-serif",
-        fontSize: 11,
-        fill: 0xaaaaaa,
+        fontFamily: Font.sans,
+        fontSize: Size.caption,
+        fill: 0x9fd6ff,
         align: "center",
         wordWrap: true,
-        wordWrapWidth: width - 60,
+        wordWrapWidth: this.chrome.contentWidth,
       },
     });
-    description.anchor.set(0.5);
-    description.position.set(centerX, 85);
-    this.addChild(description);
-
-    // 限制信息容器（居中）
-    const infoContainer = new Container();
-    let infoY = 110;
-
-    if (this.levelConfig.timeLimit && this.levelConfig.maxGuesses) {
-      // 同时有时间和次数限制 - 并排居中显示
-      this.timerText = new Text({
-        text: `⏱️ ${this.gameState.remainingSec}s`,
-        style: { fontFamily: "Arial", fontSize: 18, fill: 0xffdd00 },
-      });
-      this.timerText.anchor.set(1, 0.5);
-      this.timerText.position.set(-20, 0);
-      infoContainer.addChild(this.timerText);
-
-      this.guessesText = new Text({
-        text: `🎯 ${this.gameState.remainingGuesses}次`,
-        style: { fontFamily: "Arial", fontSize: 18, fill: 0x00ff88 },
-      });
-      this.guessesText.anchor.set(0, 0.5);
-      this.guessesText.position.set(20, 0);
-      infoContainer.addChild(this.guessesText);
-
-      infoContainer.position.set(centerX, infoY);
-      this.addChild(infoContainer);
-    } else if (this.levelConfig.timeLimit) {
-      // 只有时间限制 - 单独居中
-      this.timerText = new Text({
-        text: `⏱️ 剩余时间: ${this.gameState.remainingSec}s`,
-        style: { fontFamily: "Arial", fontSize: 18, fill: 0xffdd00 },
-      });
-      this.timerText.anchor.set(0.5, 0.5);
-      this.timerText.position.set(centerX, infoY);
-      this.addChild(this.timerText);
-    } else if (this.levelConfig.maxGuesses) {
-      // 只有次数限制 - 单独居中
-      this.guessesText = new Text({
-        text: `🎯 剩余机会: ${this.gameState.remainingGuesses}次`,
-        style: { fontFamily: "Arial", fontSize: 18, fill: 0x00ff88 },
-      });
-      this.guessesText.anchor.set(0.5, 0.5);
-      this.guessesText.position.set(centerX, infoY);
-      this.addChild(this.guessesText);
-    }
-
-    // 道具效果提示（居中）
-    this.effectHintText.style = {
-      fontFamily: "Arial",
-      fontSize: 11,
-      fill: 0xaaddff,
-      align: "center",
-    };
-    this.effectHintText.anchor.set(0.5);
-    this.effectHintText.position.set(centerX, 135);
-    this.addChild(this.effectHintText);
+    this.effectHintText.anchor.set(0.5, 0);
+    this.effectHintText.x = layout.centerX;
+    this.effectHintText.y = layout.stats.y + STATS_H;
+    this.uiLayer.addChild(this.effectHintText);
     this._updateEffectHint();
 
-    // 插槽区域（居中）
-    this._buildSlots();
-    const slotWidth = 60;
-    const slotHeight = 70;
-    const gap = 10;
-    const totalSlotsWidth = 4 * slotWidth + 3 * gap;
-    this.slotsContainer.position.set(centerX - totalSlotsWidth / 2, 160);
-    this.addChild(this.slotsContainer);
+    // ── 历史记录板（统一组件，替代原来的 8 行纯文本）──
+    const records: GuessRecord[] = this.gameState.history.map((h) => ({
+      guess: h.guess,
+      a: h.a,
+      b: h.b,
+    }));
+    this.board = new GuessBoard({
+      width: layout.board.w,
+      height: layout.board.h,
+      emptyText: "还没有猜测记录\n用下方键盘输入 4 位数字",
+    });
+    this.board.x = layout.board.x;
+    this.board.y = layout.board.y;
+    this.board.setRecords(records);
+    this.uiLayer.addChild(this.board);
 
-    // GuessInput 键盘（仅键盘，槽由上方 slotsContainer 负责）
-    const keypadY = 160 + this.slotsContainer.height + 60;
+    // ── 结果条带（固定高度带，绝不遮挡键盘）──
+    this.result = new ResultBanner({
+      width: layout.board.w,
+      idleText: this.levelConfig.timeLimit ? "注意时间，A 位置对 · B 数字对" : "A 位置对 · B 数字对",
+    });
+    this.result.x = layout.board.x;
+    this.result.y = layout.result.y;
+    this.uiLayer.addChild(this.result);
+
+    // ── 输入槽（保留自绘，以支持「揭示」道具显示单个数字）──
+    this.slotsContainer = new Container();
+    this._buildSlots();
+    // 槽以自身原点为中心绘制，第 i 个槽中心 = i*(SS+SG)；
+    // 把第 0 个槽中心放到「4 槽整体居中」的左边第一个位置
+    this.slotsContainer.x = layout.centerX - 1.5 * (geometry.slotSize + geometry.slotGap);
+    this.slotsContainer.y = layout.inputTop + geometry.slotSize / 2;
+    this.uiLayer.addChild(this.slotsContainer);
+
+    // ── 键盘（贴底，几何由屏幕宽度推算）──
     this.guessInput = new GuessInput({
+      screenWidth: width,
       showSlots: false,
-      slotSize: 60,
-      slotGap: gap,
-      keySize: 70,
-      keyGap: 10,
-      keyFontSize: 24,
-      actionFontSize: 13,
       allowRepeat: false,
-      confirmLabel: "✓",
-      backspaceLabel: "⌫",
+      confirmLabel: "确认",
+      backspaceLabel: "退格",
       eliminatedItems: this.gameState.powerUpEffects.eliminatedDigits || [],
       onGuessChange: (guess) => {
         this.gameState.currentGuess = guess;
@@ -245,142 +231,121 @@ export class CampaignScene extends Container {
       onSubmit: (guess) => this._handleConfirm(guess),
     });
     this.guessInput.setGuess(this.gameState.currentGuess);
-    this.guessInput.x = centerX;
-    this.guessInput.y = keypadY;
-    this.addChild(this.guessInput);
+    this.guessInput.x = layout.centerX;
+    this.guessInput.y = layout.keypadTop;
     if (this.gameState.gameEnded) this.guessInput.setEnabled(false);
-
-    // 结果文本（居中）- 键盘下方
-    const resultY = keypadY + this.guessInput.totalHeight + 10;
-    this.resultText.style = {
-      fontFamily: "Arial",
-      fontSize: 22,
-      fill: 0xffff00,
-      align: "center",
-    };
-    this.resultText.anchor.set(0.5);
-    this.resultText.position.set(centerX, resultY);
-    this.addChild(this.resultText);
-
-    // 历史记录（居中）- 结果文本下方
-    const historyY = resultY + 35;
-    this.historyText.style = {
-      fontFamily: "Courier New, monospace",
-      fontSize: 13,
-      fill: 0xcccccc,
-      align: "center",
-    };
-    this.historyText.anchor.set(0.5, 0);
-    this.historyText.position.set(centerX, historyY);
-    this.addChild(this.historyText);
-
-    // 道具栏移除 - 现在使用背包按钮
-    // this._buildPowerUps(centerX, height - 80);
+    this.uiLayer.addChild(this.guessInput);
   }
 
+  /** 数字物品类型的最小定义（关卡模式固定猜数字） */
+  private _buildBackpackButton(right: number, y: number, size: number): Container {
+    const totalItems = Object.values(this.gameState.availablePowerUps).reduce(
+      (sum, count) => sum + count,
+      0
+    );
+    this.backpackButton = new BackpackButton({
+      x: right - size,
+      y,
+      size,
+      onClick: () => this._showBackpack(),
+    });
+    this.backpackButton.updateCount(totalItems);
+    return this.backpackButton;
+  }
+
+  private _buildStats(y: number, left: number, right: number): void {
+    const cfg = this.levelConfig;
+    const mk = (text: string, color: number, x: number, anchorX: number) => {
+      const t = new Text({
+        text,
+        style: { fontFamily: Font.mono, fontSize: Size.bodySm + 1, fill: color, fontWeight: "bold" },
+      });
+      t.anchor.set(anchorX, 0.5);
+      t.position.set(x, y + STATS_H / 2);
+      this.uiLayer.addChild(t);
+      return t;
+    };
+
+    const timerLabel = `⏱ ${this.gameState.remainingSec ?? "-"}s`;
+    const guessLabel = `🎯 ${this.gameState.remainingGuesses ?? "-"}次`;
+
+    if (cfg.timeLimit && cfg.maxGuesses) {
+      this.timerText = mk(timerLabel, Color.warning, left, 0);
+      this.guessesText = mk(guessLabel, Color.success, right, 1);
+    } else if (cfg.timeLimit) {
+      this.timerText = mk(timerLabel, Color.warning, (left + right) / 2, 0.5);
+    } else if (cfg.maxGuesses) {
+      this.guessesText = mk(guessLabel, Color.success, (left + right) / 2, 0.5);
+    }
+  }
+
+  /** 自绘输入槽：尺寸与统一几何一致，因此与教学模式完全同款 */
   private _buildSlots(): void {
-    this.slotsContainer.removeChildren();
+    if (!this.slotsContainer) return;
+    const geometry = computePlayGeometry(this.app.screen.width, ITEM_TYPE_DIGITS);
+    const SS = geometry.slotSize;
+    const SG = geometry.slotGap;
     const revealedPos = this.gameState.powerUpEffects.revealedPositions || [];
 
-    const slotWidth = 60;
-    const slotHeight = 70;
-    const gap = 10;
+    this.slotsContainer.removeChildren().forEach((c) => c.destroy({ children: true }));
 
     for (let i = 0; i < 4; i++) {
       const slot = new Container();
-      const slotBg = new Graphics();
+      slot.x = i * (SS + SG);
+
+      const bg = new Graphics();
       const revealed = revealedPos.find((r) => r.pos === i);
+      const digit = this.gameState.currentGuess[i] || "";
 
-      if (revealed) {
-        // 已揭示的位置 - 显示数字
-        slotBg.roundRect(0, 0, slotWidth, slotHeight, 8).fill({ color: 0x00ff44 });
-        slotBg.roundRect(0, 0, slotWidth, slotHeight, 8).stroke({ color: 0x00ff88, width: 3 });
-        slot.addChild(slotBg);
+      // 已揭示 → 绿色实底；已填 / 空白 → 深底 + 描边
+      const filled = !!digit || !!revealed;
+      bg.roundRect(-SS / 2, -SS / 2, SS, SS, Play.slotRadius).fill({
+        color: revealed ? 0x14503a : filled ? 0x0f2a2b : Color.bgDeep,
+        alpha: revealed ? 1 : 0.9,
+      });
+      bg.roundRect(-SS / 2, -SS / 2, SS, SS, Play.slotRadius).stroke({
+        width: revealed ? 2.4 : 1.6,
+        color: revealed ? Color.success : filled ? Color.primary : Color.lineStrong,
+        alpha: filled ? 0.95 : 0.5,
+      });
+      slot.addChild(bg);
 
-        const digitText = new Text({
-          text: revealed.digit,
-          style: { fontFamily: "Arial", fontSize: 36, fill: 0xffffff, fontWeight: "bold" },
-        });
-        digitText.anchor.set(0.5);
-        digitText.position.set(slotWidth / 2, slotHeight / 2);
-        slot.addChild(digitText);
-      } else {
-        const digit = this.gameState.currentGuess[i] || "";
-        slotBg.roundRect(0, 0, slotWidth, slotHeight, 8).fill({ color: 0x1a2a3a });
-        slotBg.roundRect(0, 0, slotWidth, slotHeight, 8).stroke({ color: 0x00aaff, width: 2 });
-        slot.addChild(slotBg);
+      const text = revealed?.digit ?? digit;
+      // 空槽也画占位符「?」，与教学模式（GuessInput）保持完全一致的观感
+      const t = new Text({
+        text: text || "?",
+        style: {
+          fontFamily: Font.mono,
+          fontSize: Math.round(SS * (text ? 0.5 : 0.46)),
+          fill: text ? Color.text : Color.textFaint,
+          fontWeight: "bold",
+        },
+      });
+      t.anchor.set(0.5);
+      t.alpha = text ? 1 : 0.5;
+      slot.addChild(t);
 
-        if (digit) {
-          const digitText = new Text({
-            text: digit,
-            style: { fontFamily: "Arial", fontSize: 36, fill: 0xffffff },
-          });
-          digitText.anchor.set(0.5);
-          digitText.position.set(slotWidth / 2, slotHeight / 2);
-          slot.addChild(digitText);
-        }
-      }
-
-      slot.position.set(i * (slotWidth + gap), 0);
       this.slotsContainer.addChild(slot);
     }
   }
 
-  private _buildPowerUps(centerX: number, y: number): void {
-    const availableTypes = this.levelConfig.availablePowerUps;
-    const totalWidth = availableTypes.length * 70 + (availableTypes.length - 1) * 10;
-    const startX = centerX - totalWidth / 2;
+  /** 尺寸变化：重建 UI 层并重放结算层，避免沿用旧坐标导致内容溢出 */
+  private _relayout(): void {
+    this.backpackModal = null;
+    this.modalLayer.removeChildren().forEach((c) => c.destroy({ children: true }));
+    this.uiLayer.removeChildren().forEach((c) => c.destroy({ children: true }));
+    this._buildUI();
 
-    availableTypes.forEach((type, idx) => {
-      const powerUpData = getPowerUp(type);
-      const count = this.gameState.availablePowerUps[type] || 0;
-      const btn = new PowerUpButton({
-        icon: powerUpData.icon,
-        name: powerUpData.name,
-        count,
-        disabled: this.gameState.gameEnded,
-        onClick: () => this._usePowerUp(type),
-      });
-      btn.position.set(startX + idx * 80, y);
-      this.addChild(btn);
-      this.powerUpButtons.set(type, btn);
-    });
-  }
-
-  private _handleConfirm(guess: string): void {
-    if (this.gameState.gameEnded) return;
-    if (!isValidGuess(guess)) {
-      this.resultText.text = "请输入 4 位不重复数字";
-      this.resultText.style.fill = 0xff6644;
-      return;
-    }
-
-    playClick();
-    const { a, b } = evaluate(this.gameState.secret, guess);
-    this.gameState.history.push({ guess, a, b });
-    this.gameState.currentGuess = "";
-    this.guessInput?.clear();
-
-    if (this.gameState.remainingGuesses !== null) {
-      this.gameState.remainingGuesses--;
-      this.guessesText!.text = `🎯 ${this.gameState.remainingGuesses}次`;
-    }
-
-    this._buildSlots();
-    this._updateHistory();
-
-    if (a === 4) {
-      this._handleVictory();
-    } else if (
-      this.gameState.remainingGuesses !== null &&
-      this.gameState.remainingGuesses <= 0
-    ) {
-      this._handleDefeat();
-    } else {
-      this.resultText.text = `→ ${a}A${b}B`;
-      this.resultText.style.fill = 0x88ff88;
+    if (this.pendingResult) {
+      const { victory, stars, isPerfect } = this.pendingResult;
+      this.overlayLayer.removeChildren().forEach((c) => c.destroy({ children: true }));
+      this._showResult(victory, stars, isPerfect);
     }
   }
+
+  // ════════════════════════════════════════
+  //  道具 / 背包
+  // ════════════════════════════════════════
 
   private _usePowerUp(type: PowerUpType): void {
     if (this.gameState.gameEnded) return;
@@ -391,36 +356,53 @@ export class CampaignScene extends Container {
     this.gameState = PowerUpEffects.apply(this.gameState, type);
     this.gameState.availablePowerUps[type] = count - 1;
 
-    // 关闭背包模态框（稍后会重建UI）
     this._hideBackpack();
-
     this._updateEffectHint();
     this._buildSlots();
 
-    // 重建键盘以反映排除效果
-    // 保存需要保留的UI元素引用
-    const keepElements = [
-      this.bg,
-      this.slotsContainer,
-      this.effectHintText,
-      this.resultText,
-      this.historyText,
-      this.timerText,
-      this.guessesText,
-    ].filter(Boolean);
+    // 键盘需要重建以反映「排除」效果。
+    // 旧实现用一个 keepElements 白名单 + children.filter 来挑选要保留的节点，
+    // 一旦新增 UI 元素忘记加进白名单就会被误删；这里改为只重建键盘与背包计数。
+    this._rebuildKeypad();
 
-    // 找到并移除键盘和其他临时元素
-    const toRemove = this.children.filter((c) => !keepElements.includes(c));
-    toRemove.forEach((c) => this.removeChild(c));
+    const totalItems = Object.values(this.gameState.availablePowerUps).reduce(
+      (sum, c) => sum + c,
+      0
+    );
+    this.backpackButton?.updateCount(totalItems);
+  }
 
-    this._buildUI();
+  private _rebuildKeypad(): void {
+    if (!this.guessInput) return;
+    const x = this.guessInput.x;
+    const y = this.guessInput.y;
+    this.uiLayer.removeChild(this.guessInput);
+    this.guessInput.destroy({ children: true });
+
+    this.guessInput = new GuessInput({
+      screenWidth: this.app.screen.width,
+      showSlots: false,
+      allowRepeat: false,
+      confirmLabel: "确认",
+      backspaceLabel: "退格",
+      eliminatedItems: this.gameState.powerUpEffects.eliminatedDigits || [],
+      onGuessChange: (guess) => {
+        this.gameState.currentGuess = guess;
+        this._buildSlots();
+      },
+      onSubmit: (guess) => this._handleConfirm(guess),
+    });
+    this.guessInput.setGuess(this.gameState.currentGuess);
+    this.guessInput.x = x;
+    this.guessInput.y = y;
+    if (this.gameState.gameEnded) this.guessInput.setEnabled(false);
+    this.uiLayer.addChild(this.guessInput);
   }
 
   private _showBackpack(): void {
     if (this.backpackModal || this.gameState.gameEnded) return;
 
-    // 转换道具数据格式
-    const items = this.levelConfig.availablePowerUps.map(type => {
+    const items = this.levelConfig.availablePowerUps.map((type) => {
       const powerUpData = getPowerUp(type);
       return {
         id: type,
@@ -438,39 +420,73 @@ export class CampaignScene extends Container {
       onUseItem: (itemId) => this._usePowerUp(itemId as PowerUpType),
       onClose: () => this._hideBackpack(),
     });
-    this.addChild(this.backpackModal);
+    this.modalLayer.addChild(this.backpackModal);
   }
 
   private _hideBackpack(): void {
     if (this.backpackModal) {
-      this.removeChild(this.backpackModal);
+      this.modalLayer.removeChild(this.backpackModal);
       this.backpackModal.destroy();
       this.backpackModal = null;
     }
   }
 
   private _updateEffectHint(): void {
+    if (!this.effectHintText) return;
     const hints: string[] = [];
     const { eliminatedDigits, revealedPositions, knownDigits } = this.gameState.powerUpEffects;
 
     if (eliminatedDigits && eliminatedDigits.length > 0) {
-      hints.push(`❌ 已排除: ${eliminatedDigits.join(", ")}`);
+      hints.push(`❌ 已排除: ${eliminatedDigits.join(",")}`);
     }
     if (knownDigits && knownDigits.length > 0) {
-      hints.push(`🔍 包含数字: ${knownDigits.sort().join(", ")}`);
+      hints.push(`🔍 包含: ${knownDigits.slice().sort().join(",")}`);
     }
     if (revealedPositions && revealedPositions.length > 0) {
-      hints.push(`💡 已揭示 ${revealedPositions.length} 个位置`);
+      hints.push(`💡 已揭示 ${revealedPositions.length} 位`);
     }
-
-    this.effectHintText.text = hints.join("  |  ");
+    this.effectHintText.text = hints.join("  ·  ");
   }
 
-  private _updateHistory(): void {
-    const lines = this.gameState.history.map(
-      (h) => `${h.guess}  →  ${h.a}A${h.b}B`
+  // ════════════════════════════════════════
+  //  提交 / 计时
+  // ════════════════════════════════════════
+
+  private _handleConfirm(guess: string): void {
+    if (this.gameState.gameEnded) return;
+    if (!isValidGuess(guess)) {
+      this.result?.showError("请输入 4 位不重复数字");
+      return;
+    }
+
+    const { a, b } = evaluate(this.gameState.secret, guess);
+    this.gameState.history.push({ guess, a, b });
+    this.gameState.currentGuess = "";
+    this.guessInput?.clear();
+
+    if (this.gameState.remainingGuesses !== null) {
+      this.gameState.remainingGuesses--;
+      if (this.guessesText) {
+        this.guessesText.text = this.levelConfig.timeLimit && this.levelConfig.maxGuesses
+          ? `🎯 ${this.gameState.remainingGuesses}次`
+          : `🎯 剩余机会: ${this.gameState.remainingGuesses}次`;
+      }
+    }
+
+    this._buildSlots();
+    this.board?.setRecords(
+      this.gameState.history.map((h) => ({ guess: h.guess, a: h.a, b: h.b }))
     );
-    this.historyText.text = lines.slice(-8).join("\n");
+    this.result?.show(guess, a, b);
+
+    if (a === 4) {
+      this._handleVictory();
+    } else if (
+      this.gameState.remainingGuesses !== null &&
+      this.gameState.remainingGuesses <= 0
+    ) {
+      this._handleDefeat();
+    }
   }
 
   private _startTimer(): void {
@@ -478,11 +494,16 @@ export class CampaignScene extends Container {
     this.timerId = setInterval(() => {
       if (this.gameState.remainingSec === null) return;
       this.gameState.remainingSec--;
-      this.timerText!.text = `⏱️ ${this.gameState.remainingSec}s`;
-
-      if (this.gameState.remainingSec <= 0) {
-        this._handleDefeat();
+      if (this.timerText) {
+        this.timerText.text =
+          this.levelConfig.timeLimit && this.levelConfig.maxGuesses
+            ? `⏱ ${this.gameState.remainingSec}s`
+            : `⏱ 剩余时间: ${this.gameState.remainingSec}s`;
+        // 最后 10 秒转红，给出明确紧迫感
+        this.timerText.style.fill =
+          this.gameState.remainingSec <= 10 ? Color.danger : Color.warning;
       }
+      if (this.gameState.remainingSec <= 0) this._handleDefeat();
     }, 1000);
   }
 
@@ -511,12 +532,11 @@ export class CampaignScene extends Container {
     }
 
     this._saveProgress(guessCount, elapsedMs, stars, isPerfect);
-
-    // 先显示昵称输入弹窗，再显示结果
     this._showNameInputDialog(guessCount, elapsedMs, stars, isPerfect);
   }
 
   private _handleDefeat(): void {
+    if (this.gameState.gameEnded) return;
     this.gameState.gameEnded = true;
     this.gameState.victory = false;
     this.guessInput?.setEnabled(false);
@@ -554,116 +574,114 @@ export class CampaignScene extends Container {
     ProgressManager.save(progress);
   }
 
+  // ════════════════════════════════════════
+  //  结算层
+  // ════════════════════════════════════════
+
+  /** 结算弹窗：卡片宽度随屏幕收窄，不再固定 400px（小屏会溢出） */
   private _showResult(victory: boolean, stars: number, isPerfect: boolean): void {
-    const overlay = new Graphics();
-    overlay.rect(0, 0, this.app.screen.width, this.app.screen.height);
-    overlay.fill({ color: 0x000000, alpha: 0.8 });
-    this.addChild(overlay);
+    this.pendingResult = { victory, stars, isPerfect };
 
     const { width, height } = this.app.screen;
-    const panel = new Graphics();
-    panel.roundRect(0, 0, 400, 350, 16).fill({ color: 0x1a2a3a });
-    panel.position.set(width / 2 - 200, height / 2 - 175);
-    this.addChild(panel);
+    const cardW = Math.min(320, width - 40);
+    const cardH = victory ? 300 : 240;
 
-    const btnWidth = 120;
-    const widthOffset = 10;
-    const heightOffset = 60;
+    const scrim = new Graphics();
+    scrim.rect(0, 0, width, height).fill({ color: 0x000000, alpha: 0.8 });
+    this.overlayLayer.addChild(scrim);
+
+    const panel = new Container();
+    panel.x = width / 2;
+    panel.y = height / 2;
+
+    const bg = new Graphics();
+    bg.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, Radius.xl).fill({
+      color: Color.bgElevated,
+      alpha: 0.98,
+    });
+    bg.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, Radius.xl).stroke({
+      width: 1.6,
+      color: victory ? Color.success : Color.danger,
+      alpha: 0.85,
+    });
+    panel.addChild(bg);
+
+    const title = new Text({
+      text: victory ? (isPerfect ? "🏆 完美通关！" : "✅ 通关成功！") : "❌ 挑战失败",
+      style: {
+        fontFamily: Font.sans,
+        fontSize: Size.title,
+        fill: victory ? (isPerfect ? Color.gold : Color.success) : Color.danger,
+        fontWeight: "bold",
+      },
+    });
+    title.anchor.set(0.5);
+    title.y = -cardH / 2 + 46;
+    panel.addChild(title);
 
     if (victory) {
-      const title = new Text({
-        text: isPerfect ? "🏆 完美通关！" : "✅ 通关成功！",
-        style: {
-          fontFamily: "Arial",
-          fontSize: 36,
-          fill: isPerfect ? 0xffd700 : 0x00ff88,
-          fontWeight: "bold",
-        },
-      });
-      title.anchor.set(0.5);
-      title.position.set(width / 2, height / 2 - 100);
-      this.addChild(title);
-
       const starsText = new Text({
-        text: `⭐ 获得星星: ${stars}`,
-        style: { fontFamily: "Arial", fontSize: 24, fill: 0xffdd00 },
+        text: `⭐ 获得星星 ${stars}`,
+        style: { fontFamily: Font.sans, fontSize: Size.body, fill: Color.gold },
       });
       starsText.anchor.set(0.5);
-      starsText.position.set(width / 2, height / 2 - 40);
-      this.addChild(starsText);
-
-      const statsText = new Text({
-        text: `猜测次数: ${this.gameState.history.length}`,
-        style: { fontFamily: "Arial", fontSize: 18, fill: 0xcccccc },
-      });
-      statsText.anchor.set(0.5);
-      statsText.position.set(width / 2, height / 2);
-      this.addChild(statsText);
-
-      const nextBtn = new Button({
-        label: "下一关",
-        width: btnWidth,
-        fontSize: 15,
-        onClick: () => {
-          this._stopTimer();
-          if (this.opts.onNextLevel) {
-            this.opts.onNextLevel(this.levelConfig.id + 1);
-          }
-        },
-      });
-      nextBtn.position.set(width / 2 - btnWidth / 2 - widthOffset, height / 2 + heightOffset);
-      this.addChild(nextBtn);
-
-      // 返回按钮（横向排列在右侧）
-      const backBtn = new Button({
-        label: "返回",
-        width: btnWidth,
-        fontSize: 15,
-        onClick: () => {
-          this._stopTimer();
-          this.opts.onBack();
-        },
-      });
-      backBtn.position.set(width / 2 + btnWidth / 2 + widthOffset, height / 2 + heightOffset);
-      this.addChild(backBtn);
+      starsText.y = -cardH / 2 + 88;
+      panel.addChild(starsText);
     } else {
-      const title = new Text({
-        text: "❌ 挑战失败",
-        style: {
-          fontFamily: "Arial",
-          fontSize: 36,
-          fill: 0xff4444,
-          fontWeight: "bold",
-        },
-      });
-      title.anchor.set(0.5);
-      title.position.set(width / 2, height / 2 - 80);
-      this.addChild(title);
-
       const secretText = new Text({
-        text: `答案是: ${this.gameState.secret}`,
-        style: { fontFamily: "Arial", fontSize: 24, fill: 0xffdd00 },
+        text: `正确答案 ${this.gameState.secret}`,
+        style: { fontFamily: Font.mono, fontSize: Size.body, fill: Color.gold },
       });
       secretText.anchor.set(0.5);
-      secretText.position.set(width / 2, height / 2 - 20);
-      this.addChild(secretText);
+      secretText.y = -cardH / 2 + 88;
+      panel.addChild(secretText);
+    }
 
-      const backBtn = new Button({
-        label: "返回",
-        width: btnWidth,
-        fontSize: 15,
+    const statsText = new Text({
+      text: `猜测次数 ${this.gameState.history.length}`,
+      style: { fontFamily: Font.sans, fontSize: Size.bodySm, fill: Color.textSub },
+    });
+    statsText.anchor.set(0.5);
+    statsText.y = -cardH / 2 + 116;
+    panel.addChild(statsText);
+
+    const btnW = cardW - 60;
+    if (victory) {
+      const nextBtn = new Button({
+        label: "下一关",
+        width: btnW,
+        height: 46,
+        fontSize: 16,
         onClick: () => {
           this._stopTimer();
-          this.opts.onBack();
+          if (this.opts.onNextLevel) this.opts.onNextLevel(this.levelConfig.id + 1);
         },
       });
-      backBtn.position.set(width / 2, height / 2 + heightOffset);
-      this.addChild(backBtn);
+      nextBtn.y = -cardH / 2 + 152;
+      panel.addChild(nextBtn);
     }
+
+    const backBtn = new Button({
+      label: victory ? "返回关卡列表" : "返回",
+      width: btnW,
+      height: victory ? 42 : 46,
+      fontSize: 15,
+      fillColor: victory ? Color.bgPanel : undefined,
+      onClick: () => {
+        this._stopTimer();
+        this.opts.onBack();
+      },
+    });
+    backBtn.y = victory ? -cardH / 2 + 204 : -cardH / 2 + 152;
+    panel.addChild(backBtn);
+
+    this.overlayLayer.addChild(panel);
   }
 
   /**
-   * 显示昵称输入对话框
+   * 昵称输入对话框。
+   * 旧实现在多个分支里手动 removeChild 一堆节点，漏掉任何一次都会把
+   * DOM 输入框永久留在页面上（还会挡住 canvas）。这里统一成 closeDialog()。
    */
   private _showNameInputDialog(
     guessCount: number,
@@ -671,103 +689,135 @@ export class CampaignScene extends Container {
     stars: number,
     isPerfect: boolean
   ): void {
-    const overlay = new Graphics();
-    overlay.rect(0, 0, this.app.screen.width, this.app.screen.height);
-    overlay.fill({ color: 0x000000, alpha: 0.7 });
-    overlay.eventMode = "static";
-    this.addChild(overlay);
-
     const { width, height } = this.app.screen;
-    const panel = new Graphics();
-    panel.roundRect(0, 0, 400, 300, 16).fill({ color: 0x1a2a3a });
-    panel.roundRect(0, 0, 400, 300, 16).stroke({ color: 0x00aaff, width: 2 });
-    panel.position.set(width / 2 - 200, height / 2 - 150);
-    this.addChild(panel);
 
-    // 标题
+    const scrim = new Graphics();
+    scrim.rect(0, 0, width, height).fill({ color: 0x000000, alpha: 0.78 });
+    scrim.eventMode = "static";
+    scrim.hitArea = new Rectangle(0, 0, width, height);
+    this.overlayLayer.addChild(scrim);
+
+    const cardW = Math.min(320, width - 40);
+    const cardH = 268;
+    const panel = new Container();
+    panel.x = width / 2;
+    panel.y = height / 2;
+
+    const bg = new Graphics();
+    bg.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, Radius.xl).fill({
+      color: Color.bgElevated,
+      alpha: 0.98,
+    });
+    bg.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, Radius.xl).stroke({
+      width: 1.6,
+      color: Color.primary,
+      alpha: 0.85,
+    });
+    panel.addChild(bg);
+    this.overlayLayer.addChild(panel);
+
     const title = new Text({
       text: "🎉 通关成功！",
-      style: {
-        fontFamily: "Arial",
-        fontSize: 28,
-        fill: 0x00ff88,
-        fontWeight: "bold",
-      },
+      style: { fontFamily: Font.sans, fontSize: Size.sectionTitle, fill: Color.success, fontWeight: "bold" },
     });
-    title.anchor.set(0.5, 0);
-    title.position.set(width / 2, height / 2 - 120);
-    this.addChild(title);
+    title.anchor.set(0.5);
+    title.y = -cardH / 2 + 36;
+    panel.addChild(title);
 
-    // 成绩信息
     const statsText = new Text({
-      text: `猜测次数：${guessCount}  用时：${(timeMs / 1000).toFixed(1)}秒`,
-      style: {
-        fontFamily: "Arial",
-        fontSize: 16,
-        fill: 0xcccccc,
-      },
+      text: `猜测 ${guessCount} 次 · 用时 ${(timeMs / 1000).toFixed(1)}s`,
+      style: { fontFamily: Font.sans, fontSize: Size.bodySm, fill: Color.textSub },
     });
-    statsText.anchor.set(0.5, 0);
-    statsText.position.set(width / 2, height / 2 - 70);
-    this.addChild(statsText);
+    statsText.anchor.set(0.5);
+    statsText.y = -cardH / 2 + 68;
+    panel.addChild(statsText);
 
-    // 提示文本
     const hint = new Text({
-      text: "输入你的昵称上传排行榜：",
-      style: {
-        fontFamily: "Arial",
-        fontSize: 18,
-        fill: 0xffffff,
-      },
+      text: "输入昵称上传排行榜",
+      style: { fontFamily: Font.sans, fontSize: Size.bodySm, fill: Color.text },
     });
-    hint.anchor.set(0.5, 0);
-    hint.position.set(width / 2, height / 2 - 35);
-    this.addChild(hint);
+    hint.anchor.set(0.5);
+    hint.y = -cardH / 2 + 98;
+    panel.addChild(hint);
 
-    // 创建 HTML 输入框
+    // DOM 输入框：定位到卡片内「昵称」那一行的位置（屏幕居中下方一点）
     const input = document.createElement("input");
     input.type = "text";
-    input.placeholder = "请输入昵称 (最多20字)";
+    input.placeholder = "昵称（最多 20 字）";
     input.maxLength = 20;
-    input.value = getNickname(); // 使用Cookie中保存的昵称作为默认值
+    input.value = getNickname();
     input.style.cssText = `
       position: fixed;
       left: 50%;
-      top: 50%;
-      transform: translate(-50%, -10px);
-      width: 300px;
-      padding: 10px;
+      top: calc(50% - 8px);
+      transform: translate(-50%, 0);
+      width: ${Math.round(cardW - 60)}px;
+      padding: 10px 12px;
       font-size: 16px;
-      border: 2px solid #00aaff;
-      border-radius: 8px;
+      text-align: center;
+      border: 2px solid #2ff3d0;
+      border-radius: 10px;
       background: #0a1a2a;
       color: #ffffff;
       outline: none;
       z-index: 10000;
     `;
     document.body.appendChild(input);
-    input.focus();
+    this.nicknameInput = input;
+    // 移动端不要立刻弹软键盘（会把画面顶上去），仅在桌面端自动聚焦
+    if (!matchMedia("(pointer: coarse)").matches) input.focus();
 
-    // 提交逻辑
-    const handleSubmit = async () => {
+    const btnW = (cardW - 72) / 2;
+
+    const closeDialog = () => {
+      this._removeNicknameInput();
+      this.overlayLayer.removeChildren().forEach((c) => c.destroy({ children: true }));
+    };
+
+    const loadingText = new Text({
+      text: "",
+      style: { fontFamily: Font.sans, fontSize: Size.caption, fill: Color.warning },
+    });
+    loadingText.anchor.set(0.5);
+    loadingText.y = -cardH / 2 + 142;
+    panel.addChild(loadingText);
+
+    const submitBtn = new Button({
+      label: "提交成绩",
+      width: btnW,
+      height: 44,
+      fontSize: 15,
+      onClick: () => void handleSubmit(),
+    });
+    submitBtn.x = -btnW / 2 - 6;
+    submitBtn.y = cardH / 2 - 44;
+    panel.addChild(submitBtn);
+
+    const skipBtn = new Button({
+      label: "跳过",
+      width: btnW,
+      height: 44,
+      fontSize: 15,
+      fillColor: Color.bgPanel,
+      onClick: () => {
+        closeDialog();
+        this._showResult(true, stars, isPerfect);
+      },
+    });
+    skipBtn.x = btnW / 2 + 6;
+    skipBtn.y = cardH / 2 - 44;
+    panel.addChild(skipBtn);
+
+    const handleSubmit = async (): Promise<void> => {
       const playerName = input.value.trim();
       if (!playerName) {
-        alert("请输入昵称");
+        loadingText.text = "请先输入昵称";
+        loadingText.style.fill = Color.danger;
         return;
       }
-
       playClick();
-      submitBtn.visible = false;
-      skipBtn.visible = false;
-
-      // 显示加载提示
-      const loadingText = new Text({
-        text: "上传中...",
-        style: { fontFamily: "Arial", fontSize: 16, fill: 0xffaa00 },
-      });
-      loadingText.anchor.set(0.5);
-      loadingText.position.set(width / 2, height / 2 + 60);
-      this.addChild(loadingText);
+      loadingText.text = "上传中…";
+      loadingText.style.fill = Color.warning;
 
       try {
         await submitCampaignScore({
@@ -776,77 +826,27 @@ export class CampaignScene extends Container {
           guessCount,
           timeMs,
         });
-
-        // 保存昵称到Cookie（如果用户修改了）
-        if (playerName !== getNickname()) {
-          setNickname(playerName);
-        }
-
-        // 移除输入框和对话框
-        document.body.removeChild(input);
-        this.removeChild(overlay);
-        this.removeChild(panel);
-        this.removeChild(title);
-        this.removeChild(statsText);
-        this.removeChild(hint);
-        this.removeChild(loadingText);
-
-        // 显示成绩结果
+        if (playerName !== getNickname()) setNickname(playerName);
+        closeDialog();
         this._showResult(true, stars, isPerfect);
       } catch (error) {
         console.error("提交成绩失败:", error);
-        loadingText.text = "上传失败，请稍后重试";
-        loadingText.style.fill = 0xff4444;
-        submitBtn.visible = true;
-        skipBtn.visible = true;
+        loadingText.text = "上传失败，可稍后再试或跳过";
+        loadingText.style.fill = Color.danger;
       }
     };
 
-
-    const btnWidth = 100;
-    const widthOffset = 10;
-    const heightOffset = 70;
-
-    // 提交按钮（左侧）
-    const submitBtn = new Button({
-      label: "提交成绩",
-      width: btnWidth,
-      fontSize: 15,
-      onClick: handleSubmit,
-    });
-    submitBtn.position.set(width / 2 - btnWidth / 2 - widthOffset, height / 2 + heightOffset);
-    this.addChild(submitBtn);
-
-    // 跳过按钮（右侧）
-    const skipBtn = new Button({
-      label: "跳过",
-      width: btnWidth,
-      fontSize: 15,
-      onClick: () => {
-        playClick();
-        document.body.removeChild(input);
-        this.removeChild(overlay);
-        this.removeChild(panel);
-        this.removeChild(title);
-        this.removeChild(statsText);
-        this.removeChild(hint);
-        this.removeChild(submitBtn);
-        this.removeChild(skipBtn);
-        this._showResult(true, stars, isPerfect);
-      },
-    });
-    skipBtn.position.set(width / 2 + btnWidth / 2 + widthOffset, height / 2 + heightOffset);
-    this.addChild(skipBtn);
-
-    // 回车提交
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        handleSubmit();
-      }
+      if (e.key === "Enter") void handleSubmit();
     });
   }
 
-  animate(): void {
-    this.bg.animate();
+  private nicknameInput: HTMLInputElement | null = null;
+
+  private _removeNicknameInput(): void {
+    if (this.nicknameInput && this.nicknameInput.parentNode) {
+      this.nicknameInput.parentNode.removeChild(this.nicknameInput);
+    }
+    this.nicknameInput = null;
   }
 }

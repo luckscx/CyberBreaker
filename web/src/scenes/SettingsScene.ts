@@ -1,8 +1,8 @@
 import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
-import { BackButton } from "@/components/BackButton";
+import { SceneChrome } from "@/components/SceneChrome";
 import { Button } from "@/components/Button";
-import { Background } from "@/components/Background";
+
 import { getNickname, setNickname, validateNickname } from "@/services/settingsManager";
 
 export interface SettingsSceneOptions {
@@ -10,7 +10,7 @@ export interface SettingsSceneOptions {
 }
 
 export class SettingsScene extends Container {
-  private bg: Background;
+  private chrome: SceneChrome;
   private nicknameInputBg: Graphics;
   private nicknameText: Text;
   private errorText: Text;
@@ -25,31 +25,15 @@ export class SettingsScene extends Container {
     const h = app.screen.height;
     const cx = w / 2;
 
-    // Add animated background
-    this.bg = new Background({
+    // 统一顶栏
+    this.chrome = new SceneChrome({
       width: w,
       height: h,
+      onBack: () => opts.onBack(),
+      title: "设置",
       particleCount: 25,
     });
-    this.addChild(this.bg);
-
-    // Back button
-    const backButton = new BackButton({
-      x: 12,
-      y: 12,
-      onClick: () => opts.onBack(),
-    });
-    this.addChild(backButton);
-
-    // Title
-    const title = new Text({
-      text: "设置",
-      style: { fontFamily: "system-ui", fontSize: 24, fill: 0x00ffcc, fontWeight: "bold" },
-    });
-    title.anchor.set(0.5);
-    title.x = cx;
-    title.y = 60;
-    this.addChild(title);
+    this.addChild(this.chrome);
 
     // Nickname section
     const nicknameLabel = new Text({
@@ -127,7 +111,7 @@ export class SettingsScene extends Container {
   }
 
   private _animate = (): void => {
-    this.bg.animate();
+    this.chrome.animate();
   };
 
   private _activateInput(): void {
