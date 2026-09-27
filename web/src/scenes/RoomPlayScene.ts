@@ -1,12 +1,22 @@
 import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
 import { GuessInput } from "@/components/GuessInput";
-import { MusicToggle } from "@/components/MusicToggle";
-import { BackButton } from "@/components/BackButton";
+import { GuessBoard, type GuessRecord } from "@/components/GuessBoard";
+import { ResultBanner } from "@/components/ResultBanner";
+import { SceneChrome } from "@/components/SceneChrome";
+import { Segmented } from "@/components/Segmented";
 import { BackpackButton } from "@/components/BackpackButton";
 import { BackpackModal } from "@/components/BackpackModal";
 import { RoomClient, type RoomRole, type RoomRule } from "@/room/client";
 import { inventoryToItemData } from "@/data/pvpItems";
+import { parseAbResult } from "@/logic/guess";
+import { ITEM_TYPE_DIGITS } from "@/types/itemTypes";
+import {
+  computePlayGeometry,
+  computePlayScreen,
+  observeResize,
+} from "@/ui/layout";
+import { Color, Font, Size } from "@/ui/theme";
 
 interface Particle {
   g: Graphics;
@@ -17,6 +27,10 @@ interface Particle {
 }
 
 const TURN_SEC = 60;
+/** 状态条高度（回合 / 倒计时 + 我的密码） */
+const STATS_H = 46;
+/** 分段控件高度 */
+const SEG_H = 34;
 
 export interface RoomPlaySceneOptions {
   app: Application;
@@ -38,21 +52,58 @@ export interface RoomPlaySceneOptions {
   }[];
 }
 
+const RULE_TITLE: Record<RoomRule, string> = {
+  standard: "联机对战 · 标准",
+  position_only: "联机对战 · 位置赛",
+  guess_person: "联机对战 · 猜人名",
+};
+
+/**
+ * 实时 1v1 对战。
+ *
+ * 呈现层改动（玩法逻辑与 WS 协议不变）：
+ *   - 顶栏接入 SceneChrome，与其余页面统一；背包键挂在顶栏 extras 上
+ *   - 双方历史从「两列 12px 纯文本」改为「分段切换 + 全宽 GuessBoard」：
+ *     一块历史板吃满宽度，A/B 徽章才有位置显示清楚；分段标签带条数，
+ *     一眼能看出双方各猜了几次
+ *   - 历史数据结构化（{guess,a,b}），不再拼字符串
+ *   - 结果反馈改 ResultBanner，不再与其它元素抢位置
+ *   - 整页自下而上排布（computePlayScreen），键盘贴底，矮屏不溢出，支持旋转重建
+ */
 export class RoomPlayScene extends Container {
   private app: Application;
-  private turnText: Text;
-  private countdownText: Text;
-  private guessInput: GuessInput;
-  private myHistoryText: Text;
-  private peerHistoryText: Text;
-  private resultText: Text;
   private client: RoomClient;
   private myRole: RoomRole;
   private turn: RoomRole;
   private turnStartAt: number;
+  private rule: RoomRule;
+  private myCode = "";
+  private inventory: { [itemId: string]: number } = {};
+
+  // 分层：UI 层可整体重建，模态与结算层常驻其上
+  private uiLayer: Container;
+  private modalLayer: Container;
+  private overlayLayer: Container;
+
+  private chrome: SceneChrome | null = null;
+  private guessInput: GuessInput | null = null;
+  private board: GuessBoard | null = null;
+  private result: ResultBanner | null = null;
+  private segmented: Segmented | null = null;
+  private turnText: Text | null = null;
+  private countdownText: Text | null = null;
+  private myCodeText: Text | null = null;
+  private itemEffectText: Text | null = null;
+  private backpackButton: BackpackButton | null = null;
+  private backpackModal: BackpackModal | null = null;
+
   private unsub: (() => void) | null = null;
-  private myHistory: string[] = [];
-  private peerHistory: string[] = [];
+  /** 结构化历史：我的 / 对方的 */
+  private myHistory: GuessRecord[] = [];
+  private peerHistory: GuessRecord[] = [];
+  /** 当前分段视图 0=我方 1=对方 */
+  private viewIndex = 0;
+
   private tickerId: ReturnType<typeof setInterval> | null = null;
   private timeoutReported = false;
   private gameOver = false;
@@ -60,16 +111,11 @@ export class RoomPlayScene extends Container {
   private gameOverStartTime = 0;
   private gameOverParticles: Particle[] = [];
   private gameOverTickerBound: ((ticker: { deltaMS: number }) => void) | null = null;
-  private rule: RoomRule;
-  private inventory: { [itemId: string]: number } = {};
-  private backpackButton: BackpackButton | null = null;
-  private backpackModal: BackpackModal | null = null;
-  private itemEffectText: Text | null = null;
-  private static readonly ITEM_REDUCE_SEC = 10;
+  private stopResize: (() => void) | null = null;
 
-  constructor(opts: RoomPlaySceneOptions) {
+  constructor(private opts: RoomPlaySceneOptions) {
     super();
-    const { app, client, myRole, initialTurn, turnStartAt, rule, myCode, joinUrl, onBack, history, inventory } = opts;
+    const { app, client, myRole, initialTurn, turnStartAt, rule, myCode, joinUrl, history, inventory } = opts;
     this.app = app;
     this.client = client;
     this.myRole = myRole;
@@ -77,23 +123,19 @@ export class RoomPlayScene extends Container {
     this.turnStartAt = turnStartAt;
     this.rule = rule;
     this.inventory = inventory ?? {};
-    const w = app.screen.width;
-    const cx = w / 2;
+    this.myCode = myCode;
 
-    // 恢复历史记录（如果是重连）
+    // 恢复历史记录（重连场景）。解析失败的条目直接跳过，避免渲染出假结果。
     if (history && history.length > 0) {
-      console.log(`[RoomPlayScene] restoring ${history.length} history records`);
       history.forEach((record) => {
-        const line = `${record.guess} → ${record.result}`;
-        if (record.role === myRole) {
-          this.myHistory.push(line);
-        } else {
-          this.peerHistory.push(line);
-        }
+        const parsed = parseAbResult(record.result);
+        if (!parsed) return;
+        const rec: GuessRecord = { guess: record.guess, a: parsed.a, b: parsed.b };
+        if (record.role === myRole) this.myHistory.push(rec);
+        else this.peerHistory.push(rec);
       });
     }
 
-    // Update browser URL to joinUrl for easy sharing
     if (joinUrl && typeof window !== "undefined") {
       try {
         const url = new URL(joinUrl);
@@ -103,134 +145,215 @@ export class RoomPlayScene extends Container {
       }
     }
 
-    const backButton = new BackButton({
-      x: 16,
-      y: 16,
-      onClick: () => {
-        onBack();
-      },
-    });
-    this.addChild(backButton);
+    this.uiLayer = new Container();
+    this.modalLayer = new Container();
+    this.overlayLayer = new Container();
+    this.addChild(this.uiLayer, this.modalLayer, this.overlayLayer);
 
-    const toggleSize = 48;
-    const musicToggle = new MusicToggle({
-      x: w - 16 - toggleSize,
-      y: 16,
-    });
-    this.addChild(musicToggle);
-
-    // 背包按钮
-    const totalItems = Object.values(this.inventory).reduce((sum, count) => sum + count, 0);
-    this.backpackButton = new BackpackButton({
-      x: w - 16 - toggleSize * 2 - 10,
-      y: 16,
-      onClick: () => this._showBackpack(),
-    });
-    this.backpackButton.updateCount(totalItems);
-    this.addChild(this.backpackButton);
-
-    this.turnText = new Text({
-      text: this.turn === myRole ? "你的回合" : "对方回合",
-      style: { fontFamily: "system-ui", fontSize: 18, fill: this.turn === myRole ? 0x00ffcc : 0xffaa44 },
-    });
-    this.turnText.anchor.set(0.5);
-    this.turnText.x = cx - 50;
-    this.turnText.y = 80;
-    this.addChild(this.turnText);
-
-    this.countdownText = new Text({
-      text: String(TURN_SEC),
-      style: { fontFamily: "system-ui", fontSize: 16, fill: 0xffaa44 },
-    });
-    this.countdownText.anchor.set(0.5);
-    this.countdownText.x = cx + 50;
-    this.countdownText.y = 80;
-    this.addChild(this.countdownText);
-
-    const secLabel = new Text({
-      text: "秒",
-      style: { fontFamily: "system-ui", fontSize: 11, fill: 0x888888 },
-    });
-    secLabel.anchor.set(0, 0.5);
-    secLabel.x = cx + 65;
-    secLabel.y = 80;
-    this.addChild(secLabel);
-
-    this.guessInput = new GuessInput({
-      slotSize: 50,
-      keySize: 64,
-      keyGap: 8,
-      allowRepeat: rule === "position_only",
-      onSubmit: (guess) => this._submitGuess(guess),
-    });
-    this.guessInput.x = cx;
-    this.guessInput.y = 90;
-    this.addChild(this.guessInput);
-
-    this.resultText = new Text({
-      text: "",
-      style: { fontFamily: "system-ui", fontSize: 14, fill: 0x88ff88 },
-    });
-    this.resultText.anchor.set(0.5, 0);
-    this.resultText.x = cx;
-    this.resultText.y = 90 + this.guessInput.totalHeight + 6;
-    this.addChild(this.resultText);
-
-    const historyY = 90 + this.guessInput.totalHeight + 28;
-    const colGap = 20;
-    this.myHistoryText = new Text({
-      text: this.myHistory.length > 0
-        ? "我的猜测：\n" + this.myHistory.join("\n")
-        : "我的猜测：\n",
-      style: { fontFamily: "system-ui", fontSize: 12, fill: 0x00ccaa },
-    });
-    this.myHistoryText.anchor.set(0, 0);
-    this.myHistoryText.x = colGap;
-    this.myHistoryText.y = historyY;
-    this.addChild(this.myHistoryText);
-    // 显示我的密码
-    const myCodeLabel = new Text({
-      text: `我的密码：${myCode}`,
-      style: { fontFamily: "system-ui", fontSize: 12, fill: 0x00ffcc, fontWeight: "bold" },
-    });
-    myCodeLabel.anchor.set(0, 0);
-    myCodeLabel.x = w / 2 + colGap;
-    myCodeLabel.y = historyY;
-    this.addChild(myCodeLabel);
-
-    this.peerHistoryText = new Text({
-      text: this.peerHistory.length > 0
-        ? "对方猜测：\n" + this.peerHistory.join("\n")
-        : "对方猜测：\n",
-      style: { fontFamily: "system-ui", fontSize: 12, fill: 0xffaa66 },
-    });
-    this.peerHistoryText.anchor.set(0, 0);
-    this.peerHistoryText.x = w / 2 + colGap;
-    this.peerHistoryText.y = historyY + 18;
-    this.addChild(this.peerHistoryText);
-
-    // 道具效果提示文字
-    const h = app.screen.height;
-    this.itemEffectText = new Text({
-      text: "",
-      style: { fontFamily: "system-ui", fontSize: 13, fill: 0xff6644, fontWeight: "bold" },
-    });
-    this.itemEffectText.anchor.set(0.5);
-    this.itemEffectText.x = cx;
-    this.itemEffectText.y = h - 50;
-    this.addChild(this.itemEffectText);
-
-    this.guessInput.setEnabled(this.turn === myRole);
+    this._buildUI();
     this._startCountdown();
     this.unsub = this.client.onMessage((msg) => this._onMsg(msg));
+    this.stopResize = observeResize(() => this._relayout());
   }
 
   override destroy(options?: Parameters<Container["destroy"]>[0]): void {
     if (this.tickerId !== null) clearInterval(this.tickerId);
     if (this.gameOverTickerBound) this.app.ticker.remove(this.gameOverTickerBound);
+    this.stopResize?.();
+    this.stopResize = null;
     this.unsub?.();
     super.destroy(options);
   }
+
+  // ════════════════════════════════════════
+  //  构建
+  // ════════════════════════════════════════
+
+  private _buildUI(): void {
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
+
+    this.chrome = new SceneChrome({
+      width: w,
+      height: h,
+      onBack: () => this.opts.onBack(),
+      title: RULE_TITLE[this.rule] ?? "联机对战",
+      subtitle: this.rule === "position_only" ? "数字可重复 · 只反馈位置正确个数" : "4 位不重复 · A 位置对 / B 数字对",
+      extras: ({ right, y, size }) => this._buildBackpackButton(right, y, size),
+    });
+    this.uiLayer.addChild(this.chrome);
+
+    const geometry = computePlayGeometry(w, ITEM_TYPE_DIGITS);
+    const layout = computePlayScreen({
+      chrome: this.chrome,
+      geometry,
+      showSlots: true,
+      statsH: STATS_H,
+      topExtraH: SEG_H + 8,
+    });
+
+    this._buildStats(layout.stats.y);
+
+    // 道具效果提示（恒定占位，避免出现时把下面的元素挤下去）
+    this.itemEffectText = new Text({
+      text: "",
+      style: {
+        fontFamily: Font.sans,
+        fontSize: Size.caption,
+        fill: 0xffa94d,
+        fontWeight: "600",
+        align: "center",
+        wordWrap: true,
+        wordWrapWidth: this.chrome.contentWidth,
+      },
+    });
+    this.itemEffectText.anchor.set(0.5, 0.5);
+    this.itemEffectText.x = layout.centerX;
+    this.itemEffectText.y = layout.stats.y + STATS_H - 10;
+    this.uiLayer.addChild(this.itemEffectText);
+
+    // 分段控件：我方 / 对方（标签带条数）
+    this.segmented = new Segmented({
+      width: layout.board.w,
+      height: SEG_H,
+      options: this._segmentLabels(),
+      active: this.viewIndex,
+      onChange: (i) => {
+        this.viewIndex = i;
+        this._syncBoard();
+      },
+    });
+    this.segmented.x = layout.board.x;
+    this.segmented.y = layout.stats.y + STATS_H + 8;
+    this.uiLayer.addChild(this.segmented);
+
+    this.board = new GuessBoard({
+      width: layout.board.w,
+      height: layout.board.h,
+      title: this.viewIndex === 0 ? "我方猜测" : "对方猜测",
+      emptyText:
+        this.viewIndex === 0
+          ? "你还没有猜过\n轮到你时用下方键盘输入"
+          : "对方还没有猜过",
+    });
+    this.board.x = layout.board.x;
+    this.board.y = layout.board.y;
+    this.uiLayer.addChild(this.board);
+    this._syncBoard();
+
+    this.result = new ResultBanner({
+      width: layout.board.w,
+      idleText: this.turn === this.myRole ? "你的回合 · 输入 4 位后确认" : "等待对方猜测…",
+    });
+    this.result.x = layout.board.x;
+    this.result.y = layout.result.y;
+    this.uiLayer.addChild(this.result);
+
+    this.guessInput = new GuessInput({
+      screenWidth: w,
+      itemType: ITEM_TYPE_DIGITS,
+      allowRepeat: this.rule === "position_only",
+      onSubmit: (guess) => this._submitGuess(guess),
+    });
+    this.guessInput.x = layout.centerX;
+    this.guessInput.y = layout.inputTop;
+    this.guessInput.setEnabled(this.turn === this.myRole && !this.gameOver);
+    this.uiLayer.addChild(this.guessInput);
+  }
+
+  private _buildBackpackButton(right: number, y: number, size: number): Container {
+    const totalItems = Object.values(this.inventory).reduce((sum, c) => sum + c, 0);
+    this.backpackButton = new BackpackButton({
+      x: right - size,
+      y,
+      size,
+      onClick: () => this._showBackpack(),
+    });
+    this.backpackButton.updateCount(totalItems);
+    return this.backpackButton;
+  }
+
+  private _buildStats(y: number): void {
+    const left = this.chrome!.contentLeft;
+    const right = this.chrome!.contentRight;
+
+    const mine = this.turn === this.myRole;
+    this.turnText = new Text({
+      text: mine ? "● 你的回合" : "○ 对方回合",
+      style: {
+        fontFamily: Font.sans,
+        fontSize: Size.bodySm + 1,
+        fill: mine ? Color.primary : Color.warning,
+        fontWeight: "bold",
+      },
+    });
+    this.turnText.anchor.set(0, 0.5);
+    this.turnText.position.set(left, y + 13);
+    this.uiLayer.addChild(this.turnText);
+
+    this.countdownText = new Text({
+      text: String(TURN_SEC),
+      style: {
+        fontFamily: Font.mono,
+        fontSize: Size.body + 3,
+        fill: Color.warning,
+        fontWeight: "bold",
+      },
+    });
+    this.countdownText.anchor.set(1, 0.5);
+    this.countdownText.position.set(right, y + 13);
+    this.uiLayer.addChild(this.countdownText);
+
+    // 我的密码：对手正在猜它，必须常驻可见
+    this.myCodeText = new Text({
+      text: `我的密码 ${this.myCode || "----"}`,
+      style: {
+        fontFamily: Font.mono,
+        fontSize: Size.caption,
+        fill: Color.textSub,
+      },
+    });
+    this.myCodeText.anchor.set(0, 0.5);
+    this.myCodeText.position.set(left, y + 34);
+    this.uiLayer.addChild(this.myCodeText);
+  }
+
+  private _segmentLabels(): string[] {
+    return [`我方 ${this.myHistory.length}`, `对方 ${this.peerHistory.length}`];
+  }
+
+  /** 把当前分段的记录推给历史板 */
+  private _syncBoard(): void {
+    if (!this.board || !this.segmented) return;
+    const mine = this.viewIndex === 0;
+    this.board.setTitle(mine ? "我方猜测" : "对方猜测");
+    this.board.setRecords(mine ? this.myHistory : this.peerHistory);
+    // 更新分段标签上的条数
+    const labels = this._segmentLabels();
+    labels.forEach((l, i) => this.segmented!.setLabel(i, l));
+  }
+
+  /** 尺寸变化后重建 UI 层（历史与回合状态都在实例字段里，不会丢） */
+  private _relayout(): void {
+    const wasOpen = !!this.backpackModal;
+    this.backpackModal = null;
+    this.modalLayer.removeChildren().forEach((c) => c.destroy({ children: true }));
+    this.uiLayer.removeChildren().forEach((c) => c.destroy({ children: true }));
+    this._buildUI();
+    this._refreshCountdownFill();
+    if (this.gameOver) this.guessInput?.setEnabled(false);
+    if (wasOpen) this._showBackpack();
+  }
+
+  private _refreshCountdownFill(): void {
+    if (!this.countdownText) return;
+    const remaining = TURN_SEC - (Date.now() - this.turnStartAt) / 1000;
+    this.countdownText.style.fill = remaining <= 5 ? Color.danger : Color.warning;
+  }
+
+  // ════════════════════════════════════════
+  //  结算层
+  // ════════════════════════════════════════
 
   private _showGameOverOverlay(won: boolean): void {
     const w = this.app.screen.width;
@@ -258,10 +381,10 @@ export class RoomPlayScene extends Container {
     const title = new Text({
       text: won ? "你赢了！" : "你输了",
       style: {
-        fontFamily: "system-ui",
+        fontFamily: Font.sans,
         fontSize: 44,
         fontWeight: "bold",
-        fill: won ? 0x00ffcc : 0xff4466,
+        fill: won ? Color.primary : 0xff4466,
       },
     });
     title.anchor.set(0.5);
@@ -272,7 +395,7 @@ export class RoomPlayScene extends Container {
 
     const sub = new Text({
       text: won ? "恭喜获胜" : "对方先猜中",
-      style: { fontFamily: "system-ui", fontSize: 18, fill: won ? 0x88ffaa : 0xaa6688 },
+      style: { fontFamily: Font.sans, fontSize: Size.body + 3, fill: won ? 0x88ffaa : 0xaa6688 },
     });
     sub.anchor.set(0.5);
     sub.x = cx;
@@ -301,7 +424,7 @@ export class RoomPlayScene extends Container {
       });
     }
 
-    this.addChild(overlay);
+    this.overlayLayer.addChild(overlay);
     this.gameOverOverlay = overlay;
     this.gameOverStartTime = performance.now();
 
@@ -337,6 +460,10 @@ export class RoomPlayScene extends Container {
     this.app.ticker.add(tickerFn);
   }
 
+  // ════════════════════════════════════════
+  //  回合 / 倒计时
+  // ════════════════════════════════════════
+
   private _startCountdown(): void {
     if (this.tickerId !== null) clearInterval(this.tickerId);
     const tick = () => {
@@ -344,16 +471,17 @@ export class RoomPlayScene extends Container {
       const elapsed = (Date.now() - this.turnStartAt) / 1000;
       const remaining = TURN_SEC - elapsed;
       const sec = Math.max(0, Math.ceil(remaining));
-      this.countdownText.text = String(sec);
-      if (sec <= 5) this.countdownText.style.fill = 0xff6644;
+      if (this.countdownText) {
+        this.countdownText.text = String(sec);
+        if (sec <= 5) this.countdownText.style.fill = Color.danger;
+      }
       if (remaining <= 0) {
         if (this.tickerId !== null) clearInterval(this.tickerId);
         this.tickerId = null;
-        this.countdownText.text = "0";
+        if (this.countdownText) this.countdownText.text = "0";
         if (this.turn === this.myRole) {
-          this.resultText.text = "时间到";
-          this.resultText.style.fill = 0xff6644;
-          this.guessInput.setEnabled(false);
+          this.result?.showError("时间到");
+          this.guessInput?.setEnabled(false);
           if (!this.timeoutReported) {
             this.timeoutReported = true;
             this.client.turnTimeout();
@@ -369,18 +497,28 @@ export class RoomPlayScene extends Container {
     this.timeoutReported = false;
     this.turn = nextTurn;
     this.turnStartAt = turnStartAt;
-    this.guessInput.clear();
-    this.turnText.text = this.turn === this.myRole ? "你的回合" : "对方回合";
-    this.turnText.style.fill = this.turn === this.myRole ? 0x00ffcc : 0xffaa44;
-    this.resultText.text = "";
-    this.guessInput.setEnabled(this.turn === this.myRole);
+    this.guessInput?.clear();
+
+    if (this.turnText) {
+      const mine = this.turn === this.myRole;
+      this.turnText.text = mine ? "● 你的回合" : "○ 对方回合";
+      this.turnText.style.fill = mine ? Color.primary : Color.warning;
+    }
+    this.result?.setIdleText(
+      this.turn === this.myRole ? "你的回合 · 输入 4 位后确认" : "等待对方猜测…"
+    );
+    this.result?.clear();
+    this.guessInput?.setEnabled(this.turn === this.myRole && !this.gameOver);
     this._startCountdown();
 
-    // 更新背包禁用状态（只能在自己回合使用）
     if (this.backpackModal) {
       this.backpackModal.setDisabled(this.turn !== this.myRole);
     }
   }
+
+  // ════════════════════════════════════════
+  //  道具
+  // ════════════════════════════════════════
 
   private _showBackpack(): void {
     if (this.backpackModal || this.gameOver) return;
@@ -393,12 +531,12 @@ export class RoomPlayScene extends Container {
       onUseItem: (itemId) => this._useItem(itemId),
       onClose: () => this._hideBackpack(),
     });
-    this.addChild(this.backpackModal);
+    this.modalLayer.addChild(this.backpackModal);
   }
 
   private _hideBackpack(): void {
     if (this.backpackModal) {
-      this.removeChild(this.backpackModal);
+      this.modalLayer.removeChild(this.backpackModal);
       this.backpackModal.destroy();
       this.backpackModal = null;
     }
@@ -413,24 +551,15 @@ export class RoomPlayScene extends Container {
       return;
     }
 
-    // 发送使用道具消息
     this.client.useItem(itemId);
-
-    // 乐观更新本地库存
     this.inventory[itemId] = count - 1;
 
-    // 更新背包按钮徽章
     const totalItems = Object.values(this.inventory).reduce((sum, c) => sum + c, 0);
-    if (this.backpackButton) {
-      this.backpackButton.updateCount(totalItems);
-    }
+    this.backpackButton?.updateCount(totalItems);
 
-    // 更新模态框中的道具卡片
     if (this.backpackModal) {
       this.backpackModal.updateItemCount(itemId, this.inventory[itemId]);
     }
-
-    // 关闭背包
     this._hideBackpack();
   }
 
@@ -438,21 +567,14 @@ export class RoomPlayScene extends Container {
     const role = msg.role as RoomRole;
     const itemId = msg.itemId as string;
     const effectData = msg.effectData;
-
-    if (role === this.myRole) {
-      // 我方使用道具
-      this._applyItemEffect(itemId, effectData, true);
-    } else {
-      // 对方使用道具
-      this._applyItemEffect(itemId, effectData, false);
-    }
+    this._applyItemEffect(itemId, effectData, role === this.myRole);
   }
 
-  private _applyItemEffect(itemId: string, effectData: any, isMyItem: boolean): void {
+  private _applyItemEffect(_itemId: string, effectData: any, isMyItem: boolean): void {
     const effect = effectData?.effect;
 
     switch (effect) {
-      case 'reveal_one':
+      case "reveal_one":
         if (!isMyItem && effectData?.position != null && effectData?.digit != null) {
           this._showItemEffect(`💡 对方揭示了一个位置：位置${effectData.position + 1}是${effectData.digit}`);
         } else if (isMyItem) {
@@ -460,25 +582,24 @@ export class RoomPlayScene extends Container {
         }
         break;
 
-      case 'eliminate_two':
+      case "eliminate_two":
         if (!isMyItem && effectData?.eliminated) {
-          this._showItemEffect(`❌ 对方排除了数字：${effectData.eliminated.join(', ')}`);
+          this._showItemEffect(`❌ 对方排除了数字：${effectData.eliminated.join(", ")}`);
         } else if (isMyItem) {
-          this._showItemEffect(`❌ 已排除数字：${effectData.eliminated.join(', ')}`);
+          this._showItemEffect(`❌ 已排除数字：${effectData.eliminated.join(", ")}`);
         }
         break;
 
-      case 'hint':
+      case "hint":
         if (!isMyItem && effectData?.digits) {
-          this._showItemEffect(`💡 对方获得了提示：${effectData.digits.join(', ')}`);
+          this._showItemEffect(`💡 对方获得了提示：${effectData.digits.join(", ")}`);
         } else if (isMyItem) {
-          this._showItemEffect(`💡 提示：答案包含数字 ${effectData.digits.join(', ')}`);
+          this._showItemEffect(`💡 提示：答案包含数字 ${effectData.digits.join(", ")}`);
         }
         break;
 
-      case 'extra_time':
+      case "extra_time":
         if (effectData?.targetRole === this.myRole) {
-          // 给自己加时间
           this.turnStartAt -= effectData.seconds * 1000;
           this._startCountdown();
           this._showItemEffect(`⏰ 时间+${effectData.seconds}秒`);
@@ -487,9 +608,8 @@ export class RoomPlayScene extends Container {
         }
         break;
 
-      case 'reduce_opponent_time':
+      case "reduce_opponent_time":
         if (effectData?.targetRole === this.myRole) {
-          // 对方减我的时间
           this.turnStartAt += Math.abs(effectData.seconds) * 1000;
           this._startCountdown();
           this._showItemEffect(`⏳ 对方使用了减时！-${Math.abs(effectData.seconds)}秒`);
@@ -498,72 +618,43 @@ export class RoomPlayScene extends Container {
         }
         break;
 
-      case 'limit_opponent_guesses':
-        if (effectData?.targetRole === this.myRole) {
-          this._showItemEffect(`🚫 对方限制了你的猜测次数！`);
-        } else if (isMyItem) {
-          this._showItemEffect(`🚫 已限制对方猜测次数`);
-        }
-        break;
-
       default:
-        if (isMyItem) {
-          this._showItemEffect(`✓ 已使用道具`);
-        } else {
-          this._showItemEffect(`对方使用了道具`);
-        }
+        break;
     }
   }
 
   private _onInventorySync(msg: any): void {
-    const role = msg.role as RoomRole;
-    const inventory = msg.inventory as { [itemId: string]: number };
-
-    if (role === this.myRole) {
-      // 同步服务器下发的库存
-      this.inventory = inventory;
-
-      // 更新背包按钮徽章
-      const totalItems = Object.values(this.inventory).reduce((sum, c) => sum + c, 0);
-      if (this.backpackButton) {
-        this.backpackButton.updateCount(totalItems);
-      }
-
-      // 如果背包打开着，更新其中的道具卡片
-      if (this.backpackModal) {
-        Object.keys(inventory).forEach(itemId => {
-          this.backpackModal?.updateItemCount(itemId, inventory[itemId]);
-        });
-      }
-    }
+    const inv = msg.inventory as { [itemId: string]: number } | undefined;
+    if (!inv) return;
+    this.inventory = inv;
+    const totalItems = Object.values(this.inventory).reduce((sum, c) => sum + c, 0);
+    this.backpackButton?.updateCount(totalItems);
   }
 
   private _showItemEffect(text: string): void {
     if (!this.itemEffectText) return;
     this.itemEffectText.text = text;
-    this.itemEffectText.alpha = 1;
-    // 3 秒后淡出
-    let fadeTimer: ReturnType<typeof setInterval> | null = null;
-    const startFade = setTimeout(() => {
-      let alpha = 1;
-      fadeTimer = setInterval(() => {
-        alpha -= 0.05;
-        if (alpha <= 0) {
-          if (this.itemEffectText) {
-            this.itemEffectText.alpha = 0;
-            this.itemEffectText.text = "";
-          }
-          if (fadeTimer) clearInterval(fadeTimer);
-        } else {
-          if (this.itemEffectText) this.itemEffectText.alpha = alpha;
-        }
-      }, 50);
-    }, 2000);
-    // 避免内存泄漏（场景销毁时会清理 children）
-    void startFade;
+    const start = Date.now();
+    const dur = 3000;
+    const step = () => {
+      if (this.destroyed || !this.itemEffectText) return;
+      const t = (Date.now() - start) / dur;
+      if (t >= 1) {
+        this.itemEffectText.text = "";
+        return;
+      }
+      // 最后 0.6s 淡出
+      this.itemEffectText.alpha = t > 0.8 ? (1 - t) / 0.2 : 1;
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
   }
 
-  private _onMsg(msg: { type: string; role?: RoomRole; nextTurn?: RoomRole; turnStartAt?: number; guess?: string; result?: string; winner?: RoomRole; error?: string; itemId?: string; effectData?: any; inventory?: { [itemId: string]: number } }): void {
+  // ════════════════════════════════════════
+  //  消息
+  // ════════════════════════════════════════
+
+  private _onMsg(msg: any): void {
     if (msg.type === "item_used") {
       this._onItemUsed(msg);
       return;
@@ -577,28 +668,31 @@ export class RoomPlayScene extends Container {
       return;
     }
     if (msg.type === "guess_result") {
-      const line = `${msg.guess} → ${msg.result}`;
-      if (msg.role === this.myRole) {
-        this.myHistory.push(line);
-        this.myHistoryText.text = "我的猜测：\n" + this.myHistory.join("\n");
+      const parsed = parseAbResult(msg.result);
+      if (parsed) {
+        const rec: GuessRecord = { guess: msg.guess, a: parsed.a, b: parsed.b };
+        if (msg.role === this.myRole) this.myHistory.push(rec);
+        else this.peerHistory.push(rec);
+        this._syncBoard();
+        // 自己的猜测结果也同步到结果条，立刻能看清
+        if (msg.role === this.myRole) this.result?.show(msg.guess, parsed.a, parsed.b);
       } else {
-        this.peerHistory.push(line);
-        this.peerHistoryText.text = "对方猜测：\n" + this.peerHistory.join("\n");
+        console.warn("[RoomPlayScene] 无法解析服务端结果串:", msg.result);
       }
       this._applyTurnSwitch(msg.nextTurn!, msg.turnStartAt ?? Date.now());
     }
     if (msg.type === "game_over") {
       this.gameOver = true;
       const won = msg.winner === this.myRole;
-      this.turnText.text = won ? "你赢了！" : "你输了";
-      this.turnText.style.fill = won ? 0x00ff88 : 0xff6644;
-      this.resultText.text = won ? "恭喜获胜" : "对方先猜中";
-      this.guessInput.setEnabled(false);
+      if (this.turnText) {
+        this.turnText.text = won ? "● 你赢了" : "○ 你输了";
+        this.turnText.style.fill = won ? Color.success : Color.danger;
+      }
+      this.guessInput?.setEnabled(false);
       this._showGameOverOverlay(won);
     }
     if (msg.type === "error") {
-      this.resultText.text = msg.error ?? "错误";
-      this.resultText.style.fill = 0xff6644;
+      this.result?.showError(msg.error ?? "错误");
     }
   }
 

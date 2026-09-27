@@ -4,13 +4,13 @@ import { computeGuessRowLayout } from "@/ui/layout";
 
 /** 一条猜猜看记录 */
 export interface GuessRecord {
-  /** 猜测内容（4 个物品，数字或 emoji） */
+  /** 猜测内容（4 个物品，数字或 emoji）。留空且提供 note 时渲染为「备注行」 */
   guess: string;
   /** A：数字对且位置对 */
   a: number;
   /** B：数字对但位置错 */
   b: number;
-  /** 可选：附加说明（道具效果等），单独占一行 */
+  /** 可选：附加说明（道具效果等）。用 note 行承载，避免道具记录被丢掉 */
   note?: string;
 }
 
@@ -54,6 +54,7 @@ export class GuessBoard extends Container {
   private maskG: Graphics;
   private emptyText: Text;
   private countText: Text;
+  private titleText: Text;
   private rowViews: RowView[] = [];
   private records: GuessRecord[] = [];
 
@@ -85,7 +86,7 @@ export class GuessBoard extends Container {
     this.addChild(frame);
 
     // ── 标题 + 条数（左侧）──
-    const title = new Text({
+    this.titleText = new Text({
       text: opts.title ?? "猜测记录",
       style: {
         fontFamily: Font.sans,
@@ -94,16 +95,16 @@ export class GuessBoard extends Container {
         fontWeight: "600",
       },
     });
-    title.x = PAD_X + 2;
-    title.y = 7;
-    this.addChild(title);
+    this.titleText.x = PAD_X + 2;
+    this.titleText.y = 7;
+    this.addChild(this.titleText);
 
     this.countText = new Text({
       text: "",
       style: { fontFamily: Font.mono, fontSize: Size.micro, fill: Color.textFaint },
     });
     this.countText.anchor.set(0, 0);
-    this.countText.x = PAD_X + 2 + title.width + 6;
+    this.countText.x = PAD_X + 2 + this.titleText.width + 6;
     this.countText.y = 9;
     this.addChild(this.countText);
 
@@ -188,6 +189,13 @@ export class GuessBoard extends Container {
     if (grew && this.offset === 0) this._applyOffset(0);
   }
 
+  /** 更新标题并重新排布「条数」文本（联机页面切换「我方/对方」时用） */
+  setTitle(title: string): void {
+    if (this.titleText.text === title) return;
+    this.titleText.text = title;
+    this.countText.x = PAD_X + 2 + this.titleText.width + 6;
+  }
+
   /** 追加一条记录 */
   push(record: GuessRecord): void {
     this.records.push(record);
@@ -240,6 +248,37 @@ export class GuessBoard extends Container {
     const bg = new Graphics();
     root.addChild(bg);
     bg.x = PAD_X;
+
+    // 备注行：道具使用记录等。不画方块与徽章，避免占用推理信息的视觉位。
+    if (!rec.guess && rec.note) {
+      const g = new Graphics();
+      g.roundRect(0, 0, rw, L.rowH, Play.rowRadius).fill({
+        color: Color.bgDeep,
+        alpha: 0.5,
+      });
+      g.roundRect(0, 0, rw, L.rowH, Play.rowRadius).stroke({
+        width: 1,
+        color: Color.line,
+        alpha: 0.6,
+      });
+      bg.addChild(g);
+
+      const t = new Text({
+        text: rec.note,
+        style: {
+          fontFamily: Font.sans,
+          fontSize: Size.caption,
+          fill: Color.warning,
+        },
+      });
+      t.anchor.set(0, 0.5);
+      t.x = 12;
+      t.y = L.rowH / 2;
+      // 超出宽度时裁到行内，不越界
+      if (t.width > rw - 24) t.scale.set((rw - 24) / t.width);
+      bg.addChild(t);
+      return { root, bg };
+    }
 
     const win = rec.a === 4;
     const bar = new Graphics();

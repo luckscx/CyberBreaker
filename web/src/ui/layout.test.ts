@@ -106,6 +106,25 @@ describe("computePlayScreen · 分区布局", () => {
     expect(L.result.y + L.result.h).toBeLessThan(L.keypadTop);
   });
 
+  it("topExtraH（如分段控件）会把历史板下推且不与其重叠", () => {
+    const w = 390;
+    const h = 844;
+    const g = computePlayGeometry(w, ITEM_TYPE_DIGITS);
+    const base = computePlayScreen({ chrome: chromeOf(w, h), geometry: g, showSlots: true, statsH: 46 });
+    const withExtra = computePlayScreen({
+      chrome: chromeOf(w, h),
+      geometry: g,
+      showSlots: true,
+      statsH: 46,
+      topExtraH: 42,
+    });
+    expect(withExtra.board.y).toBeCloseTo(base.board.y + 42, 5);
+    expect(withExtra.board.h).toBeCloseTo(base.board.h - 42, 5);
+    // 下推后底部各区块位置不变（只有历史板被压缩）
+    expect(withExtra.result.y).toBeCloseTo(base.result.y, 5);
+    expect(withExtra.keypadTop).toBeCloseTo(base.keypadTop, 5);
+  });
+
   it("顶部状态条会把历史板整体下推，不与状态条重叠", () => {
     const w = 390;
     const h = 844;

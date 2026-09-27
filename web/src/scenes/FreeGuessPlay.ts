@@ -1,12 +1,16 @@
 import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
 import { GuessInput } from "@/components/GuessInput";
-import { BackButton } from "@/components/BackButton";
-import { MusicToggle } from "@/components/MusicToggle";
+import { SceneChrome } from "@/components/SceneChrome";
+import { GuessBoard, type GuessRecord } from "@/components/GuessBoard";
+import { ResultBanner } from "@/components/ResultBanner";
 import { BackpackButton } from "@/components/BackpackButton";
 import { BackpackModal } from "@/components/BackpackModal";
 import { FreeRoomClient, type FreeRoomMsg, type FreePlayerInfo, type FreeRanking } from "@/freeRoom/client";
 import { freeInventoryToItemData, getFreeItem } from "@/data/freeItems";
+import { ITEM_TYPE_DIGITS } from "@/types/itemTypes";
+import { computePlayGeometry, computePlayScreen, observeResize } from "@/ui/layout";
+import { Color, Font, Size } from "@/ui/theme";
 
 export interface FreeGuessPlayOptions {
   app: Application;
@@ -22,11 +26,14 @@ export class FreeGuessPlay extends Container {
   private app: Application;
   private client: FreeRoomClient;
   private guessLimit: number;
-  private guessInput: GuessInput;
-  private resultText: Text;
-  private remainText: Text;
-  private myHistoryContainer: Container;
-  private publicContainer: Container;
+  private guessInput!: GuessInput;
+  private result!: ResultBanner;
+  private board!: GuessBoard;
+  private remainText!: Text;
+  private publicContainer!: Container;
+  private chrome!: SceneChrome;
+  private publicH = 88;
+  private stopResize: (() => void) | null = null;
   private unsub: (() => void) | null = null;
   private myHistory: Array<
     | { type: 'guess'; guess: string; a: number; b: number }
@@ -39,6 +46,8 @@ export class FreeGuessPlay extends Container {
   private backpackButton: BackpackButton | null = null;
   private backpackModal: BackpackModal | null = null;
   private itemEffectText: Text | null = null;
+  private itemEffectBg: Graphics | null = null;
+  private itemEffectTimer: ReturnType<typeof setInterval> | null = null;
   private eliminatedDigits: string[] = [];
   private revealedPositions: Array<{ pos: number; digit: string }> = [];
   private knownDigits: string[] = [];
@@ -55,148 +64,182 @@ export class FreeGuessPlay extends Container {
     const h = this.app.screen.height;
     const cx = w / 2;
 
-    // Back & music
-    const back = new BackButton({ x: 16, y: 16, onClick: () => opts.onBack() });
-    this.addChild(back);
+    this._buildAll();
 
-    const toggleSize = 48;
-    const music = new MusicToggle({ x: w - 16 - toggleSize, y: 16 });
-    this.addChild(music);
+    this.unsub = this.client.onMessage((msg) => this._onMsg(msg));
+    this.stopResize = observeResize(() => this._relayout());
+  }
 
-    // Backpack button
-    const totalItems = Object.values(this.inventory).reduce((sum, count) => sum + count, 0);
-    this.backpackButton = new BackpackButton({
-      x: w - 16 - toggleSize * 2 - 10,
-      y: 16,
-      onClick: () => this._showBackpack(),
+  /**
+   * 构建全部呈现元素（构造与尺寸变化共用）。
+   *
+   * 分区（自上而下，键盘贴底）：
+   *   顶栏 / 剩余次数 / 实时排名 / 我的历史板 / 结果条带 / 输入槽 / 键盘
+   * 原有实现是「左 60% 键盘 + 右 40% 两栏 11px 纯文本历史」，手机上两栏都看
+   * 不清，且键盘不贴底、矮屏会溢出。现在历史换成统一 GuessBoard 吃满宽度，
+   * 键盘自下而上贴底。
+   */
+  private _buildAll(): void {
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
+
+    this.chrome = new SceneChrome({
+      width: w,
+      height: h,
+      onBack: () => this.opts.onBack(),
+      title: "多人猜数",
+      subtitle: `每人 ${this.guessLimit} 次机会 · 4 位数字可重复`,
+      particleCount: 20,
+      extras: ({ right, y, size }) => {
+        const totalItems = Object.values(this.inventory).reduce((sum, c) => sum + c, 0);
+        this.backpackButton = new BackpackButton({
+          x: right - size,
+          y,
+          size,
+          onClick: () => this._showBackpack(),
+        });
+        this.backpackButton.updateCount(totalItems);
+        return this.backpackButton;
+      },
     });
-    this.backpackButton.updateCount(totalItems);
-    this.addChild(this.backpackButton);
+    this.addChild(this.chrome);
 
-    // Title
-    const title = new Text({
-      text: "多人猜数",
-      style: { fontFamily: "system-ui", fontSize: 16, fill: 0x00ffcc, fontWeight: "bold" },
+    // 两遍布局：排行榜先按完整高度试算，若历史板被挤到不可用就把它压矮。
+    const geometry = computePlayGeometry(w, ITEM_TYPE_DIGITS);
+    const statsH = 24;
+    let rankH = this.publicH;
+    let layout = computePlayScreen({
+      chrome: this.chrome,
+      geometry,
+      showSlots: true,
+      statsH: statsH + rankH + 8,
     });
-    title.anchor.set(0.5);
-    title.x = cx; title.y = 20;
-    this.addChild(title);
+    if (layout.board.h < 150) {
+      rankH = 56;
+      this.publicH = rankH;
+      layout = computePlayScreen({
+        chrome: this.chrome,
+        geometry,
+        showSlots: true,
+        statsH: statsH + rankH + 8,
+      });
+    }
 
-    const limitHint = new Text({
-      text: `每人 ${this.guessLimit} 次机会 | 4位数字可重复`,
-      style: { fontFamily: "system-ui", fontSize: 11, fill: 0x668899 },
+    this.remainText = new Text({
+      text: `剩余 ${this.guessLimit} 次`,
+      style: {
+        fontFamily: Font.mono,
+        fontSize: Size.bodySm + 1,
+        fill: Color.primary,
+        fontWeight: "bold",
+      },
     });
-    limitHint.anchor.set(0.5);
-    limitHint.x = cx; limitHint.y = 38;
-    this.addChild(limitHint);
+    this.remainText.anchor.set(0, 0.5);
+    this.remainText.position.set(layout.board.x + 4, layout.stats.y + statsH / 2);
+    this.addChild(this.remainText);
 
-    // --- Public scoreboard (top area) ---
-    const pubY = 54;
-    const pubH = 68;
-    const pubW = Math.min(340, w - 16);
-
+    // 实时排名
+    const pubTop = layout.stats.y + statsH + 8;
     const pubBg = new Graphics();
-    pubBg.roundRect(cx - pubW / 2, pubY, pubW, pubH, 8).fill({ color: 0x0d1520, alpha: 0.9 });
-    pubBg.roundRect(cx - pubW / 2, pubY, pubW, pubH, 8).stroke({ width: 1, color: 0x334455 });
+    pubBg
+      .roundRect(layout.board.x, pubTop, layout.board.w, rankH, 10)
+      .fill({ color: Color.bgPanel, alpha: 0.85 });
+    pubBg
+      .roundRect(layout.board.x, pubTop, layout.board.w, rankH, 10)
+      .stroke({ width: 1, color: Color.line, alpha: 0.9 });
     this.addChild(pubBg);
 
     const pubLabel = new Text({
       text: "📊 实时排名",
-      style: { fontFamily: "system-ui", fontSize: 11, fill: 0x99aabb },
+      style: { fontFamily: Font.sans, fontSize: Size.caption, fill: Color.textSub },
     });
-    pubLabel.x = cx - pubW / 2 + 8;
-    pubLabel.y = pubY + 4;
+    pubLabel.position.set(layout.board.x + 10, pubTop + 4);
     this.addChild(pubLabel);
 
     this.publicContainer = new Container();
-    this.publicContainer.x = cx - pubW / 2 + 8;
-    this.publicContainer.y = pubY + 20;
+    this.publicContainer.position.set(layout.board.x + 10, pubTop + 20);
     this.addChild(this.publicContainer);
     this._renderPublicBoard();
 
-    // --- Layout: Left 60% for input, Right 40% for history ---
-    const inputY = pubY + pubH + 6;
-    const leftWidth = w * 0.6;
-    const rightWidth = w * 0.4;
-    const padding = 12;
+    // 我的历史（统一历史板）
+    this.board = new GuessBoard({
+      width: layout.board.w,
+      height: layout.board.h,
+      title: "我的猜测",
+      emptyText: "还没有提交过\n输入 4 位数字后确认",
+    });
+    this.board.x = layout.board.x;
+    this.board.y = layout.board.y;
+    this.addChild(this.board);
+    this._syncBoard();
 
-    // Left side: GuessInput (centered in 60% area)
+    // 结果条带
+    this.result = new ResultBanner({
+      width: layout.board.w,
+      idleText: "提交后立刻显示 A / B 反馈",
+    });
+    this.result.x = layout.board.x;
+    this.result.y = layout.result.y;
+    this.addChild(this.result);
+
+    // 输入（键盘贴底）
     this.guessInput = new GuessInput({
-      slotSize: 44,
-      slotGap: 6,
-      keySize: 56,
-      keyGap: 6,
-      keyFontSize: 20,
-      slotFontSize: 18,
+      screenWidth: w,
+      itemType: ITEM_TYPE_DIGITS,
       allowRepeat: true,
-      confirmLabel: "✓ 提交",
-      backspaceLabel: "⌫ 退格",
-      actionWidth: 80,
-      actionFontSize: 13,
       onSubmit: (guess) => this._submitGuess(guess),
     });
-    this.guessInput.x = leftWidth / 2;
-    this.guessInput.y = inputY;
+    this.guessInput.x = layout.centerX;
+    this.guessInput.y = layout.inputTop;
     this.addChild(this.guessInput);
 
-    // Remaining text (below input)
-    this.remainText = new Text({
-      text: `剩余 ${this.guessLimit} 次`,
-      style: { fontFamily: "system-ui", fontSize: 12, fill: 0x99aabb },
-    });
-    this.remainText.anchor.set(0.5);
-    this.remainText.x = leftWidth / 2;
-    this.remainText.y = inputY + this.guessInput.totalHeight + 4;
-    this.addChild(this.remainText);
+    // 重建（旋转 / 缩放）后恢复道具已排除的数字，否则一旋转效果就丢
+    if (this.eliminatedDigits.length > 0) {
+      this.guessInput.setEliminatedItems(this.eliminatedDigits);
+    }
 
-    // Result text (below remaining text)
-    this.resultText = new Text({
-      text: "",
-      style: { fontFamily: "system-ui", fontSize: 13, fill: 0x88ff88 },
-    });
-    this.resultText.anchor.set(0.5);
-    this.resultText.x = leftWidth / 2;
-    this.resultText.y = inputY + this.guessInput.totalHeight + 20;
-    this.addChild(this.resultText);
-
-    // --- Right side: My history (40% area) ---
-    const histX = leftWidth + padding;
-    const histY = inputY;
-    const histW = rightWidth - padding * 2;
-    const histH = h - histY - 8;
-
-    const histBg = new Graphics();
-    histBg.roundRect(histX, histY, histW, histH, 8).fill({ color: 0x0d1520, alpha: 0.85 });
-    histBg.roundRect(histX, histY, histW, histH, 8).stroke({ width: 1, color: 0x334455 });
-    this.addChild(histBg);
-
-    const histLabel = new Text({
-      text: "我的历史",
-      style: { fontFamily: "system-ui", fontSize: 11, fill: 0x99aabb },
-    });
-    histLabel.x = histX + 8;
-    histLabel.y = histY + 6;
-    this.addChild(histLabel);
-
-    this.myHistoryContainer = new Container();
-    this.myHistoryContainer.x = histX + 8;
-    this.myHistoryContainer.y = histY + 24;
-    this.addChild(this.myHistoryContainer);
-
-    // Item effect text (above history area)
+    // 道具效果浮动提示：叠在历史板正中，2 秒后淡出。
+    // 最后 addChild 以保证盖在历史板之上；背景药丸宽度随文本实测宽度重算。
+    this.itemEffectBg = new Graphics();
+    this.addChild(this.itemEffectBg);
     this.itemEffectText = new Text({
       text: "",
-      style: { fontFamily: "system-ui", fontSize: 12, fill: 0xff6644, fontWeight: "bold", wordWrap: true, wordWrapWidth: histW - 12 },
+      style: {
+        fontFamily: Font.sans,
+        fontSize: Size.bodySm,
+        fill: 0xffffff,
+        fontWeight: "bold",
+      },
     });
-    this.itemEffectText.anchor.set(0, 0);
-    this.itemEffectText.x = histX + 8;
-    this.itemEffectText.y = histY - 18;
+    this.itemEffectText.anchor.set(0.5);
+    this.itemEffectText.x = layout.centerX;
+    this.itemEffectText.y = layout.board.y + layout.board.h / 2;
+    this.itemEffectText.alpha = 0;
     this.addChild(this.itemEffectText);
 
-    this.unsub = this.client.onMessage((msg) => this._onMsg(msg));
+    if (this.eliminated) this.guessInput.setEnabled(false);
+  }
+
+  /** 尺寸变化：重建呈现层。WS 订阅与历史数据都在成员变量里，不受影响。 */
+  private _relayout(): void {
+    this._clearItemEffectTimer();
+    this.backpackModal = null;
+    this.backpackButton = null;
+    this.removeChildren().forEach((c) => c.destroy({ children: true }));
+    this._buildAll();
+  }
+
+  private _clearItemEffectTimer(): void {
+    if (this.itemEffectTimer) {
+      clearInterval(this.itemEffectTimer);
+      this.itemEffectTimer = null;
+    }
   }
 
   override destroy(options?: Parameters<Container["destroy"]>[0]): void {
+    this._clearItemEffectTimer();
+    this.stopResize?.();
+    this.stopResize = null;
     this.unsub?.();
     super.destroy(options);
   }
@@ -216,14 +259,12 @@ export class FreeGuessPlay extends Container {
       this.remainText.text = `剩余 ${msg.remaining ?? 0} 次`;
       if (msg.remaining === 0) {
         this.eliminated = true;
-        this.resultText.text = "次数已用完，等待其他玩家...";
-        this.resultText.style.fill = 0xffaa44;
+        this.result.showError("次数已用完，等待其他玩家…");
         this.guessInput.setEnabled(false);
       } else {
-        this.resultText.text = `${msg.guess} → ${msg.a}A${msg.b}B`;
-        this.resultText.style.fill = 0x88ff88;
+        this.result.show(msg.guess!, msg.a!, msg.b!);
       }
-      this._renderMyHistory();
+      this._syncBoard();
     }
 
     if (msg.type === "progress") {
@@ -241,8 +282,7 @@ export class FreeGuessPlay extends Container {
     }
 
     if (msg.type === "error") {
-      this.resultText.text = msg.message ?? "错误";
-      this.resultText.style.fill = 0xff6644;
+      this.result.showError(msg.message ?? "错误");
     }
   }
 
@@ -265,7 +305,9 @@ export class FreeGuessPlay extends Container {
       this.publicContainer.addChild(t);
     });
 
-    list.slice(0, 8).forEach((p, i) => {
+    // 面板高度会随屏幕压缩，据此决定最多显示几行，避免文字溢出面板
+    const maxRows = Math.max(2, Math.floor((this.publicH - 22) / 14));
+    list.slice(0, maxRows).forEach((p, i) => {
       const y = 14 + i * 14;
       const isMe = p.playerId === this.client.playerId;
       const fill = isMe ? 0x00ffcc : 0xccddee;
@@ -287,29 +329,14 @@ export class FreeGuessPlay extends Container {
     });
   }
 
-  private _renderMyHistory(): void {
-    this.myHistoryContainer.removeChildren();
-    const maxShow = 15;
-    const start = Math.max(0, this.myHistory.length - maxShow);
-    this.myHistory.slice(start).forEach((entry, i) => {
-      let text = '';
-      let color = 0x00ccaa;
-
-      if (entry.type === 'guess') {
-        text = `#${start + i + 1}  ${entry.guess} → ${entry.a}A${entry.b}B`;
-        color = entry.a === 4 ? 0x00ff88 : 0x00ccaa;
-      } else if (entry.type === 'item') {
-        text = `    🎒 ${entry.itemName}: ${entry.effect}`;
-        color = 0xffaa44;
-      }
-
-      const t = new Text({
-        text,
-        style: { fontFamily: "Courier New, monospace", fontSize: 11, fill: color },
-      });
-      t.y = i * 16;
-      this.myHistoryContainer.addChild(t);
-    });
+  /** 把结构化历史推给统一历史板；道具使用记录渲染为 note 行 */
+  private _syncBoard(): void {
+    const records: GuessRecord[] = this.myHistory.map((e) =>
+      e.type === 'guess'
+        ? { guess: e.guess, a: e.a, b: e.b }
+        : { guess: '', a: 0, b: 0, note: `🎒 ${e.itemName}：${e.effect}` }
+    );
+    this.board.setRecords(records);
   }
 
   private _submitGuess(guess: string): void {
@@ -404,7 +431,7 @@ export class FreeGuessPlay extends Container {
             itemName,
             effect: effectText,
           });
-          this._renderMyHistory();
+          this._syncBoard();
           // Note: guessLimit increase is handled by server
         }
         break;
@@ -419,7 +446,7 @@ export class FreeGuessPlay extends Container {
             itemName,
             effect: effectText,
           });
-          this._renderMyHistory();
+          this._syncBoard();
         } else if (effectData?.message) {
           this._showItemEffect(effectData.message);
         }
@@ -428,6 +455,9 @@ export class FreeGuessPlay extends Container {
       case 'eliminate_two':
         if (effectData?.eliminated && effectData.eliminated.length > 0) {
           this.eliminatedDigits.push(...effectData.eliminated);
+          // 把排除结果真正接到键盘上（置灰 + 「已排除」角标），
+          // 否则道具只是记了一行历史，对下一次输入毫无帮助。
+          this.guessInput.setEliminatedItems(this.eliminatedDigits);
           const effectText = `排除${effectData.eliminated.join(',')}`;
           this._showItemEffect(`❌ 排除数字：${effectData.eliminated.join(', ')}`);
           this.myHistory.push({
@@ -435,7 +465,7 @@ export class FreeGuessPlay extends Container {
             itemName,
             effect: effectText,
           });
-          this._renderMyHistory();
+          this._syncBoard();
         } else if (effectData?.message) {
           this._showItemEffect(effectData.message);
         }
@@ -451,7 +481,7 @@ export class FreeGuessPlay extends Container {
             itemName,
             effect: effectText,
           });
-          this._renderMyHistory();
+          this._syncBoard();
         }
         break;
 
@@ -461,23 +491,53 @@ export class FreeGuessPlay extends Container {
   }
 
   private _showItemEffect(text: string): void {
-    if (!this.itemEffectText) return;
+    if (!this.itemEffectText || !this.itemEffectBg) return;
     this.itemEffectText.text = text;
+
+    // 药丸背景按文本实测宽度重算，避免长提示文字溢出底色
+    const padX = 12;
+    const padY = 6;
+    const bw = this.itemEffectText.width + padX * 2;
+    const bh = this.itemEffectText.height + padY * 2;
+    const bx = this.itemEffectText.x - bw / 2;
+    const by = this.itemEffectText.y - bh / 2;
+    this.itemEffectBg
+      .clear()
+      .roundRect(bx, by, bw, bh, bh / 2)
+      .fill({ color: 0x0a1a22, alpha: 0.92 })
+      .stroke({ width: 1, color: Color.primary, alpha: 0.7 });
+
+    this.itemEffectBg.alpha = 1;
     this.itemEffectText.alpha = 1;
+
+    // 先清掉上一次的淡出定时器：连续使用道具时旧的 interval 不清理会叠加，
+    // 多个 interval 同时写 alpha 会让提示闪动甚至卡在中间透明度。
+    if (this.itemEffectTimer) {
+      clearInterval(this.itemEffectTimer);
+      this.itemEffectTimer = null;
+    }
 
     // Fade out after 2 seconds
     setTimeout(() => {
       let alpha = 1;
-      const fadeInterval = setInterval(() => {
+      this.itemEffectTimer = setInterval(() => {
         alpha -= 0.05;
         if (alpha <= 0) {
+          if (this.itemEffectTimer) {
+            clearInterval(this.itemEffectTimer);
+            this.itemEffectTimer = null;
+          }
           if (this.itemEffectText) {
             this.itemEffectText.alpha = 0;
             this.itemEffectText.text = "";
           }
-          clearInterval(fadeInterval);
+          if (this.itemEffectBg) {
+            this.itemEffectBg.alpha = 0;
+            this.itemEffectBg.clear();
+          }
         } else {
           if (this.itemEffectText) this.itemEffectText.alpha = alpha;
+          if (this.itemEffectBg) this.itemEffectBg.alpha = alpha;
         }
       }, 50);
     }, 2000);

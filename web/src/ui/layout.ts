@@ -343,6 +343,11 @@ export function computePlayScreen(args: {
   showSlots: boolean;
   /** 顶部状态条高度，默认 0 */
   statsH?: number;
+  /**
+   * 状态条与历史板之间额外占位的高度（如联机页的「我方/对方」分段控件）。
+   * 默认 0。历史板会自动吃掉因此减少的高度，不会与控件重叠。
+   */
+  topExtraH?: number;
   /** 结果条带高度，默认 40 */
   resultH?: number;
   /** 历史板与结果条带之间的间距 */
@@ -351,6 +356,7 @@ export function computePlayScreen(args: {
   const { chrome, geometry: g } = args;
   const showSlots = args.showSlots;
   const statsH = args.statsH ?? 0;
+  const topExtraH = args.topExtraH ?? 0;
   const resultH = args.resultH ?? 40;
   const gap = args.gap ?? 8;
 
@@ -363,7 +369,10 @@ export function computePlayScreen(args: {
   const resultY = resultBottom - resultH;
 
   const statsY = chrome.contentTop;
-  const boardTop = chrome.contentTop + (statsH > 0 ? statsH + gap : 0);
+  const boardTop =
+    chrome.contentTop +
+    (statsH > 0 ? statsH + gap : 0) +
+    (topExtraH > 0 ? topExtraH : 0);
   const boardBottom = resultY - gap;
   // 至少留出「表头 + 一行记录」的高度，否则历史完全不可用
   const boardH = Math.max(70, boardBottom - boardTop);

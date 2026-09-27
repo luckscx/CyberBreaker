@@ -99,3 +99,34 @@ export function isValidGuessForRule(guess: string, rule: string): boolean {
   if (rule === "position_only") return true;
   return new Set(guess.split("")).size === 4;
 }
+
+/**
+ * 解析联机对战里服务端下发的 A/B 文本结果。
+ *
+ * 服务端在不同规则下下发的字符串形态不同：
+ *   standard      → "1A2B"
+ *   position_only → "1A"      （只反馈位置正确个数，没有 B）
+ *   平局/异常     → ""        （解析失败应返回 null，由调用方决定如何展示）
+ *
+ * 之所以单独抽成纯函数：联机场景的历史记录现在要结构化成
+ * {guess, a, b} 才能交给 GuessBoard 渲染，解析错了会静默显示成 "0A0B"，
+ * 比直接报错更难发现，所以这里单测覆盖。
+ */
+export function parseAbResult(result: string | null | undefined): { a: number; b: number } | null {
+  if (!result) return null;
+  const s = String(result).trim();
+  if (!s) return null;
+
+  const aMatch = s.match(/(\d+)\s*A/i);
+  const bMatch = s.match(/(\d+)\s*B/i);
+  // 至少要出现一个 A 或 B 才认为这是合法结果串
+  if (!aMatch && !bMatch) return null;
+
+  const a = aMatch ? Number(aMatch[1]) : 0;
+  const b = bMatch ? Number(bMatch[1]) : 0;
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  // 位置正确数不可能超过 4
+  if (a > 4 || b > 4) return null;
+
+  return { a, b };
+}

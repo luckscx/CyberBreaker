@@ -14,6 +14,7 @@ import { LevelSelectScene } from "@/scenes/LevelSelectScene";
 import { CampaignScene } from "@/scenes/CampaignScene";
 import { LeaderboardScene } from "@/scenes/LeaderboardScene";
 import { SettingsScene } from "@/scenes/SettingsScene";
+import { RuleSelectScene } from "@/scenes/RuleSelectScene";
 import { RoomWaitScene } from "@/scenes/RoomWaitScene";
 import { RoomPlayScene } from "@/scenes/RoomPlayScene";
 import { RoomGuessPersonScene } from "@/scenes/RoomGuessPersonScene";
@@ -118,81 +119,11 @@ export class Game {
 
   private showRuleSelect(): void {
     this.app.stage.removeChildren();
-    const w = this.app.screen.width;
-    const h = this.app.screen.height;
-    const cx = w / 2;
-
-    const scene = new Container();
-
-    const bg = new Background({ width: w, height: h, particleCount: 20 });
-    scene.addChild(bg);
-    this.app.ticker.add(() => bg.animate());
-
-    const backButton = new BackButton({
-      x: 16 + 24,
-      y: 16 + 24,
-      onClick: () => { playClick(); this.showHome(); },
+    const scene = new RuleSelectScene({
+      app: this.app,
+      onBack: () => this.showHome(),
+      onSelect: (rule) => this.createAndEnterRoom(rule),
     });
-    scene.addChild(backButton);
-
-    const margin = 16;
-    const musicToggle = new MusicToggle({ x: w - margin - 24, y: margin + 24 });
-    scene.addChild(musicToggle);
-
-    const title = new Text({
-      text: "选择对战规则",
-      style: { fontFamily: "system-ui", fontSize: 24, fill: 0x00ffcc, fontWeight: "bold" },
-    });
-    title.anchor.set(0.5);
-    title.x = cx;
-    title.y = h * 0.18;
-    scene.addChild(title);
-
-    const cardW = Math.min(280, w - 40);
-    const cardH = 130;
-    const cardGap = 20;
-    const startY = h * 0.3;
-
-    const makeCard = (y: number, name: string, desc: string, rule: RoomRule) => {
-      const card = new Container();
-      card.eventMode = "static";
-      card.cursor = "pointer";
-
-      const border = new Graphics();
-      border.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, 12).fill({ color: 0x0d1520, alpha: 0.95 });
-      border.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, 12).stroke({ width: 2, color: 0x334455 });
-      card.addChild(border);
-
-      const nameText = new Text({
-        text: name,
-        style: { fontFamily: "system-ui", fontSize: 18, fill: 0x00ffcc, fontWeight: "bold" },
-      });
-      nameText.anchor.set(0.5);
-      nameText.y = -30;
-      card.addChild(nameText);
-
-      const descText = new Text({
-        text: desc,
-        style: { fontFamily: "system-ui", fontSize: 12, fill: 0x99aabb, wordWrap: true, wordWrapWidth: cardW - 40 },
-      });
-      descText.anchor.set(0.5);
-      descText.y = 10;
-      card.addChild(descText);
-
-      card.x = cx;
-      card.y = y;
-
-      card.on("pointerover", () => { border.tint = 0x22ccaa; });
-      card.on("pointerout", () => { border.tint = 0xffffff; });
-      card.on("pointertap", () => { playClick(); this.createAndEnterRoom(rule); });
-
-      return card;
-    };
-
-    scene.addChild(makeCard(startY, "标准对战", "4 位不重复数字\n反馈：\n几个数字位置正确(A)\n几个数字对但位置错(B)", "standard"));
-    scene.addChild(makeCard(startY + cardH + cardGap, "位置赛", "4 位数字可重复\n仅反馈：几个位置完全正确(A)", "position_only"));
-    scene.addChild(makeCard(startY + (cardH + cardGap) * 2, "猜人名", "系统随机选一位名人\n双方轮流选题获取线索\n抢先猜出人名即获胜！", "guess_person"));
-
     this.app.stage.addChild(scene);
   }
 

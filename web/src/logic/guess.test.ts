@@ -6,6 +6,7 @@ import {
   isValidGuess,
   isValidGuessForItems,
   isValidGuessForRule,
+  parseAbResult,
 } from "./guess";
 import { ALL_ITEM_TYPES, ITEM_TYPE_DIGITS, ITEM_TYPE_FRUITS } from "@/types/itemTypes";
 
@@ -140,5 +141,40 @@ describe("evaluate · 重复数字玩法下的已知限制（行为固化）", (
   it("重复数字时会多算 B —— 已记录，需前后端一起修", () => {
     expect(evaluate("1123", "1111")).toEqual({ a: 2, b: 2 }); // 期望应为 2A0B
     expect(evaluate("1122", "2211")).toEqual({ a: 0, b: 4 }); // 这个恰好正确
+  });
+});
+
+describe("parseAbResult · 联机结果串解析", () => {
+  it("标准规则：解析出 A 与 B", () => {
+    expect(parseAbResult("1A2B")).toEqual({ a: 1, b: 2 });
+    expect(parseAbResult("0A0B")).toEqual({ a: 0, b: 0 });
+    expect(parseAbResult("4A0B")).toEqual({ a: 4, b: 0 });
+  });
+
+  it("位置赛：只有 A，B 视为 0", () => {
+    expect(parseAbResult("1A")).toEqual({ a: 1, b: 0 });
+    expect(parseAbResult("3A")).toEqual({ a: 3, b: 0 });
+  });
+
+  it("容忍大小写与空格", () => {
+    expect(parseAbResult(" 1a2b ")).toEqual({ a: 1, b: 2 });
+    expect(parseAbResult("1 A 2 B")).toEqual({ a: 1, b: 2 });
+  });
+
+  it("无法解析时返回 null（而不是静默当成 0A0B）", () => {
+    expect(parseAbResult("")).toBeNull();
+    expect(parseAbResult(null)).toBeNull();
+    expect(parseAbResult(undefined)).toBeNull();
+    expect(parseAbResult("猜对了")).toBeNull();
+    expect(parseAbResult("1234")).toBeNull();
+  });
+
+  it("越界数值判为非法（位置正确数不可能超过 4）", () => {
+    expect(parseAbResult("5A0B")).toBeNull();
+    expect(parseAbResult("0A9B")).toBeNull();
+  });
+
+  it("只出现 B 也能解析（防御性）", () => {
+    expect(parseAbResult("2B")).toEqual({ a: 0, b: 2 });
   });
 });

@@ -2,12 +2,13 @@ import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
 import { Button } from "@/components/Button";
 import { GuessInput } from "@/components/GuessInput";
-import { Background } from "@/components/Background";
-import { MusicToggle } from "@/components/MusicToggle";
-import { BackButton } from "@/components/BackButton";
+import { SceneChrome } from "@/components/SceneChrome";
 import { RoomClient, type RoomRole } from "@/room/client";
 import type { RoomRule } from "@/room/client";
 import { isValidGuessForRule } from "@/logic/guess";
+import { ITEM_TYPE_DIGITS } from "@/types/itemTypes";
+import { computePlayGeometry, computePlayScreen, observeResize } from "@/ui/layout";
+import { Color, Font, Size } from "@/ui/theme";
 
 export interface RoomWaitSceneOptions {
   app: Application;
@@ -36,12 +37,14 @@ export class RoomWaitScene extends Container {
   private myCodeSet = false;
   private peerCodeSet = false;
   private shareBar: Container | null = null;
-  private bg: Background;
+  private chrome: SceneChrome;
   private app: Application;
   private rule: RoomRule = "standard";
   private ruleLabel: Text | null = null;
   private myCode = ""; // 保存自己设置的密码
   private inventory: { [itemId: string]: number } = {};
+  private stopResize: (() => void) | null = null;
+  private codeHint: Text | null = null;
 
   constructor(private opts: RoomWaitSceneOptions) {
     super();
@@ -52,13 +55,24 @@ export class RoomWaitScene extends Container {
     const w = app.screen.width;
     const cx = w / 2;
 
-    // Add animated background
-    this.bg = new Background({
+    // 统一顶栏（原来返回键在 (16,16)、音乐键 w-64，且标题缺位）
+    this.chrome = new SceneChrome({
       width: app.screen.width,
       height: app.screen.height,
+      onBack: () => onBack(),
+      title: "对战房间",
+      subtitle: "双方各自设置 4 位密码，然后轮流破解对方",
       particleCount: 20,
     });
-    this.addChild(this.bg);
+    this.addChild(this.chrome);
+
+    // 所有纵向位置改为「顶栏下方 + 自下而上贴底」，矮屏不再把键盘挤出屏幕
+    const geometry = computePlayGeometry(w, ITEM_TYPE_DIGITS);
+    const layout = computePlayScreen({
+      chrome: this.chrome,
+      geometry,
+      showSlots: true,
+    });
 
     // Update browser URL to joinUrl for easy sharing
     if (joinUrl && typeof window !== "undefined") {
@@ -71,43 +85,27 @@ export class RoomWaitScene extends Container {
     }
 
     if (joinUrl && role === "host") {
-      this.shareBar = this._buildShareBar(app, joinUrl);
+      this.shareBar = this._buildShareBar(app, joinUrl, layout.stats.y + 92);
       this.addChild(this.shareBar);
     }
 
-    const backButton = new BackButton({
-      x: 16,
-      y: 16,
-      onClick: () => {
-        onBack();
-      },
-    });
-    this.addChild(backButton);
-
-    const toggleSize = 48;
-    const musicToggle = new MusicToggle({
-      x: w - 16 - toggleSize,
-      y: 16,
-    });
-    this.addChild(musicToggle);
-
     this.statusText = new Text({
       text: "连接中...",
-      style: { fontFamily: "system-ui", fontSize: 16, fill: 0xaaaaaa },
+      style: { fontFamily: Font.sans, fontSize: Size.bodySm + 1, fill: Color.textSub },
     });
     this.statusText.anchor.set(0.5);
     this.statusText.x = cx;
-    this.statusText.y = 85;
+    this.statusText.y = layout.stats.y + 12;
     this.addChild(this.statusText);
 
-    const statusY = 115;
+    const statusY = layout.stats.y + 48;
     this.myCircle = this._drawCircle(false);
     this.myCircle.x = cx - CIRCLE_GAP;
     this.myCircle.y = statusY;
     this.addChild(this.myCircle);
     this.myLabel = new Text({
       text: "我方",
-      style: { fontFamily: "system-ui", fontSize: 11, fill: 0x888888 },
+      style: { fontFamily: Font.sans, fontSize: Size.micro, fill: Color.textMuted },
     });
     this.myLabel.anchor.set(0.5, 0);
     this.myLabel.x = cx - CIRCLE_GAP;
@@ -120,47 +118,53 @@ export class RoomWaitScene extends Container {
     this.addChild(this.peerCircle);
     this.peerLabel = new Text({
       text: "对方",
-      style: { fontFamily: "system-ui", fontSize: 11, fill: 0x888888 },
+      style: { fontFamily: Font.sans, fontSize: Size.micro, fill: Color.textMuted },
     });
     this.peerLabel.anchor.set(0.5, 0);
     this.peerLabel.x = cx + CIRCLE_GAP;
     this.peerLabel.y = statusY + CIRCLE_R + 4;
     this.addChild(this.peerLabel);
 
+    // 密码面板：整体贴底。GuessInput 本身以「顶部中心」为原点，
+    // 直接给 x = 屏幕中心即可居中；原实现额外设了 pivot.x = width/2，
+    // 会把键盘整体左移半个宽度（与上方输入槽错位）。
     this.codeContainer = new Container();
     this.codeContainer.visible = false;
-    this.codeContainer.y = 165;
 
-    const hint = new Text({
+    this.codeHint = new Text({
       text: "设置你的 4 位密码（对方要猜的数字）",
-      style: { fontFamily: "system-ui", fontSize: 13, fill: 0x888888 },
+      style: { fontFamily: Font.sans, fontSize: Size.bodySm, fill: Color.textSub, align: "center" },
     });
-    hint.anchor.set(0.5);
-    hint.x = cx;
-    hint.y = 0;
-    this.codeContainer.addChild(hint);
+    this.codeHint.anchor.set(0.5);
+    this.codeHint.x = cx;
+    this.codeHint.y = layout.inputTop - 46;
+    this.codeContainer.addChild(this.codeHint);
 
     this.ruleLabel = new Text({
       text: "",
-      style: { fontFamily: "system-ui", fontSize: 11, fill: 0x668899 },
+      style: { fontFamily: Font.sans, fontSize: Size.caption, fill: Color.textMuted },
     });
     this.ruleLabel.anchor.set(0.5);
     this.ruleLabel.x = cx;
-    this.ruleLabel.y = 22;
+    this.ruleLabel.y = layout.inputTop - 26;
     this.codeContainer.addChild(this.ruleLabel);
 
     this.guessInput = new GuessInput({
+      screenWidth: w,
+      itemType: ITEM_TYPE_DIGITS,
       allowRepeat: this.rule === "position_only",
       onSubmit: (code) => this._submitCode(code),
     });
-    this.codeContainer.addChild(this.guessInput);
-    this.guessInput.pivot.x = this.guessInput.width / 2;
     this.guessInput.x = cx;
-    this.guessInput.y = 48;
+    this.guessInput.y = layout.inputTop;
+    this.codeContainer.addChild(this.guessInput);
 
     this._updateRuleLabel();
 
     this.addChild(this.codeContainer);
+
+    // 旋转 / 地址栏收起后重建，避免沿用旧坐标
+    this.stopResize = observeResize(() => this._relayout());
 
     this.unsub = this.client.onMessage((msg) => this._onMsg(msg));
     this.statusText.text = role === "host" ? "等待对方加入..." : "已加入房间，等待房主...";
@@ -170,13 +174,37 @@ export class RoomWaitScene extends Container {
   }
 
   private _animate = (): void => {
-    this.bg.animate();
+    this.chrome?.animate();
   };
 
   override destroy(options?: Parameters<Container["destroy"]>[0]): void {
+    this.stopResize?.();
+    this.stopResize = null;
     this.unsub?.();
     this.app.ticker.remove(this._animate, this);
     super.destroy(options);
+  }
+
+  /**
+   * 尺寸变化：只重建位置相关元素，WS 连接与已设置的密码都不受影响。
+   * （不能整场景重建 —— client 是外部注入的，重建会把订阅丢掉。）
+   */
+  private _relayout(): void {
+    const w = this.app.screen.width;
+    const cx = w / 2;
+    const geometry = computePlayGeometry(w, ITEM_TYPE_DIGITS);
+    const layout = computePlayScreen({ chrome: this.chrome, geometry, showSlots: true });
+
+    this.statusText.y = layout.stats.y + 12;
+    this.myCircle.y = layout.stats.y + 48;
+    this.peerCircle.y = layout.stats.y + 48;
+    this.myLabel.y = layout.stats.y + 48 + CIRCLE_R + 4;
+    this.peerLabel.y = layout.stats.y + 48 + CIRCLE_R + 4;
+    if (this.shareBar) this.shareBar.y = layout.stats.y + 92;
+    if (this.codeHint) this.codeHint.y = layout.inputTop - 46;
+    if (this.ruleLabel) this.ruleLabel.y = layout.inputTop - 26;
+    this.guessInput.x = cx;
+    this.guessInput.y = layout.inputTop;
   }
 
   private _applyCodeState(hostCodeSet: boolean, guestCodeSet: boolean): void {
@@ -328,13 +356,12 @@ export class RoomWaitScene extends Container {
     }
   }
 
-  private _buildShareBar(app: import("pixi.js").Application, joinUrl: string): Container {
+  private _buildShareBar(app: import("pixi.js").Application, joinUrl: string, y: number): Container {
     const w = app.screen.width;
-    const h = app.screen.height;
     const cx = w / 2;
     const bar = new Container();
     bar.x = cx;
-    bar.y = h / 2 - 50;
+    bar.y = y;
 
     const boxW = Math.min(w - 80, 320);
     const padding = 20;

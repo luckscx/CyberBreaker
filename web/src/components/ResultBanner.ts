@@ -58,6 +58,16 @@ export class ResultBanner extends Container {
     this._draw(null);
   }
 
+  /**
+   * 更新空闲态文案。
+   * 联机页的提示语随「你的回合 / 对方回合」变化，若只在构造时设一次，
+   * 回合切换后就会出现「状态栏说对方回合、结果条却说你的回合」的自相矛盾。
+   */
+  setIdleText(text: string): void {
+    if (this.idle.text === text) return;
+    this.idle.text = text;
+  }
+
   /** 空闲态：清空结果，回到说明文案 */
   clear(): void {
     if (this.rafId) cancelAnimationFrame(this.rafId);

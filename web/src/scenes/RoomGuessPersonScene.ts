@@ -1,9 +1,7 @@
 import type { Application } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
 import { Button } from "@/components/Button";
-import { MusicToggle } from "@/components/MusicToggle";
-import { BackButton } from "@/components/BackButton";
-import { Background } from "@/components/Background";
+import { SceneChrome } from "@/components/SceneChrome";
 import { RoomClient, type RoomRole, type RoomMsg, type GpCandidateQuestion } from "@/room/client";
 
 const TURN_SEC = 30;
@@ -48,14 +46,13 @@ export class RoomGuessPersonScene extends Container {
   private gameOver = false;
 
   // UI elements
-  private bg: Background;
+  private chrome!: SceneChrome;
   private titleText: Text;
   private turnText: Text;
   private countdownText: Text;
   private candidateContainer: Container;
   private qaHistoryContainer: Container;
   private qaHistoryItems: { question: string; answer: string; askedBy: RoomRole }[] = [];
-  private qaScrollOffset = 0;
   private resultText: Text;
   private wrongGuessesText: Text;
   private wrongGuesses: { role: RoomRole; name: string }[] = [];
@@ -102,40 +99,31 @@ export class RoomGuessPersonScene extends Container {
       } catch {}
     }
 
-    // Background
-    this.bg = new Background({ width: w, height: h, particleCount: 15 });
-    this.addChild(this.bg);
-
-    // Back button
-    const backButton = new BackButton({
-      x: 16,
-      y: 16,
-      onClick: () => onBack(),
+    // 统一顶栏（原来是 back(16,16) + music(w-64) + 标题 y=58，与全站基线不一致）
+    this.chrome = new SceneChrome({
+      width: w,
+      height: h,
+      onBack: () => onBack(),
+      title: "猜人名对战",
+      subtitle: "轮流选题获取线索，抢先猜对人名即获胜",
+      particleCount: 15,
     });
-    this.addChild(backButton);
+    this.addChild(this.chrome);
 
-    // Music toggle
-    const musicToggle = new MusicToggle({ x: w - 16 - 48, y: 16 });
-    this.addChild(musicToggle);
-
-    // Title
+    // 进度单独放一行（标题是静态的，进度会随提问次数变化）
     this.titleText = new Text({
-      text: `猜人名 ${this.askedCount}/${this.totalQuestions}`,
-      style: { fontFamily: "system-ui", fontSize: 16, fill: 0x00ffcc, fontWeight: "bold" },
+      text: `已提问 ${this.askedCount}/${this.totalQuestions}`,
+      style: {
+        fontFamily: "system-ui",
+        fontSize: 13,
+        fill: 0x00ffcc,
+        fontWeight: "bold",
+      },
     });
     this.titleText.anchor.set(0.5);
     this.titleText.x = cx;
-    this.titleText.y = 58;
+    this.titleText.y = this.chrome.contentTop + 8;
     this.addChild(this.titleText);
-
-    const ruleHint = new Text({
-      text: "轮流选题获取线索，抢先猜对人名即获胜",
-      style: { fontFamily: "system-ui", fontSize: 11, fill: 0x668899 },
-    });
-    ruleHint.anchor.set(0.5);
-    ruleHint.x = cx;
-    ruleHint.y = 78;
-    this.addChild(ruleHint);
 
     // Turn indicator + countdown（与规则留出整行间距）
     this.turnText = new Text({
@@ -238,7 +226,7 @@ export class RoomGuessPersonScene extends Container {
   }
 
   private _animate = (): void => {
-    this.bg.animate();
+    this.chrome?.animate();
   };
 
   override destroy(options?: Parameters<Container["destroy"]>[0]): void {
@@ -565,7 +553,7 @@ export class RoomGuessPersonScene extends Container {
       }
       if (msg.askedCount != null) this.askedCount = msg.askedCount;
       if (msg.allAsked) this.allAsked = true;
-      this.titleText.text = `猜人名 ${this.askedCount}/${this.totalQuestions}`;
+      this.titleText.text = `已提问 ${this.askedCount}/${this.totalQuestions}`;
 
       // Switch turn
       if (msg.nextTurn != null) {
