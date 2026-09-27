@@ -37,15 +37,25 @@ fi
 
 # 1. 同步代码
 echo -e "${YELLOW}[1/4] 同步代码...${NC}"
+# 排除项与 deploy.sh 保持一致：.env（防止覆盖线上 MONGODB_URI / JWT_SECRET）、
+# mongodb（服务器上 MongoDB 容器的真实数据 bind mount）。同样不使用 --delete。
 rsync -az \
   --exclude 'node_modules' \
   --exclude 'dist' \
+  --exclude 'server/dist' \
+  --exclude 'web/dist' \
   --exclude '.git' \
   --exclude '.claude' \
   --exclude '.cursor' \
   --exclude '.codebuddy' \
   --exclude '.dev_pids' \
+  --exclude '.DS_Store' \
   --exclude '*.log' \
+  --exclude 'logs' \
+  --exclude '.env' \
+  --exclude '.env.local' \
+  --exclude 'package-lock.json' \
+  --exclude 'mongodb' \
   -e "ssh -p ${PORT}" \
   "${LOCAL_PATH}/" "${SERVER}:${REMOTE_PATH}/"
 echo -e "${GREEN}✓ 完成${NC}"
